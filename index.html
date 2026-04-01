@@ -20,23 +20,8 @@ body { color:#1a1614; }
 <script type="text/babel">
 const { useState, useEffect, useRef, useMemo, useCallback } = React;
 
-// Utils
-const uid = () => (
-  window.crypto?.randomUUID
-    ? window.crypto.randomUUID()
-    : `id_${Date.now()}_${Math.random().toString(36).slice(2,9)}`
-);
-
-const safeProfileKey = (name="") =>
-  name.replace(/[^\p{L}\p{N}_-]+/gu,"_").slice(0,80) || "perfil";
-
-const noteFileName = (bookId, profileId) =>
-  `${bookId}_notes_${safeProfileKey(profileId)}.json`;
-
-const chatFileName = (bookId, profileId) =>
-  `${bookId}_chats_${safeProfileKey(profileId)}.json`;
-
-const CURRENT_SCHEMA_VERSION = 2;
+// ─── Constants ────────────────────────────────────────────────────────────────
+const CURRENT_SCHEMA_VERSION = 3;
 
 const DEF_CATS = [
   "Ficção",
@@ -57,6 +42,25 @@ const LEGACY_CATS = [
 ];
 
 const LEGACY_PROFILES = ["Eu", "Minha esposa"];
+
+// ─── Utils ────────────────────────────────────────────────────────────────────
+const uid = () => (
+  window.crypto?.randomUUID
+    ? window.crypto.randomUUID()
+    : `id_${Date.now()}_${Math.random().toString(36).slice(2,9)}`
+);
+
+const safeProfileKey = (name="") =>
+  name.replace(/[^\p{L}\p{N}_-]+/gu,"_").slice(0,80) || "perfil";
+
+const noteFileName = (bookId, profileId) =>
+  `${bookId}_notes_${safeProfileKey(profileId)}.json`;
+
+const chatFileName = (bookId, profileId) =>
+  `${bookId}_chats_${safeProfileKey(profileId)}.json`;
+
+const globalChatFileName = (profileId) =>
+  `global_chats_${safeProfileKey(profileId)}.json`;
 
 function trimStr(v){
   return typeof v === "string" ? v.trim() : "";
@@ -145,10 +149,29 @@ function joinTags(tags=[]){
   return tags.length ? tags.join(", ") : "—";
 }
 
-// IndexedDB
+function debounceValue(value, delay, setter){
+  return setTimeout(()=>setter(value), delay);
+}
+
+function catStyle(category){
+  const map = {
+    "Ficção": { bg:"rgba(97, 84, 214, .10)", brd:"rgba(97,84,214,.28)", ink:"#5647c7" },
+    "Negócios": { bg:"rgba(30, 116, 76, .10)", brd:"rgba(30,116,76,.28)", ink:"#16714a" },
+    "Marketing": { bg:"rgba(201, 95, 46, .10)", brd:"rgba(201,95,46,.28)", ink:"#b35728" },
+    "Biografia": { bg:"rgba(145, 89, 181, .10)", brd:"rgba(145,89,181,.28)", ink:"#8453a6" },
+    "Geopolítica": { bg:"rgba(174, 55, 87, .10)", brd:"rgba(174,55,87,.28)", ink:"#a33955" },
+    "Current Affairs": { bg:"rgba(32, 110, 171, .10)", brd:"rgba(32,110,171,.28)", ink:"#206eab" },
+    "História": { bg:"rgba(150, 115, 36, .10)", brd:"rgba(150,115,36,.28)", ink:"#8e6b1f" },
+    "Autoajuda": { bg:"rgba(48, 136, 117, .10)", brd:"rgba(48,136,117,.28)", ink:"#2a7e6b" },
+    "Arte e Cultura": { bg:"rgba(184, 77, 139, .10)", brd:"rgba(184,77,139,.28)", ink:"#ab4b82" }
+  };
+  return map[category] || { bg:"rgba(45,107,228,.08)", brd:"rgba(45,107,228,.25)", ink:"#2d6be4" };
+}
+
+// ─── IndexedDB ────────────────────────────────────────────────────────────────
 function openIDB(){
   return new Promise((res,rej)=>{
-    const r=indexedDB.open("mynd_library_v4",1);
+    const r=indexedDB.open("mynd_library_v5",1);
     r.onupgradeneeded=e=>e.target.result.createObjectStore("s");
     r.onsuccess=e=>res(e.target.result);
     r.onerror=()=>rej(r.error);
@@ -174,7 +197,7 @@ async function idbSet(k,v){
   });
 }
 
-// File System
+// ─── File System ──────────────────────────────────────────────────────────────
 async function wf(dir,name,txt){
   const fh=await dir.getFileHandle(name,{create:true});
   const w=await fh.createWritable();
@@ -204,7 +227,7 @@ async function listDirFiles(dir){
   return names;
 }
 
-// Index
+// ─── Index ────────────────────────────────────────────────────────────────────
 async function saveIdx(dir,data){
   await wf(dir,"index.json",JSON.stringify({
     schemaVersion: CURRENT_SCHEMA_VERSION,
@@ -233,11 +256,9 @@ async function loadIdx(dir){
   try{
     const parsed = JSON.parse(txt);
     const migrated = migrateIndexData(parsed);
-
     if(JSON.stringify(parsed) !== JSON.stringify(migrated)){
       await saveIdx(dir, migrated);
     }
-
     return migrated;
   }catch{
     const fresh = {
@@ -252,7 +273,7 @@ async function loadIdx(dir){
   }
 }
 
-// Chats
+// ─── Chats ────────────────────────────────────────────────────────────────────
 async function loadChats(dir,bookId,profileId){
   const txt=await rf(dir,chatFileName(bookId,profileId));
   if(!txt) return [];
@@ -268,7 +289,22 @@ async function saveChats(dir,bookId,profileId,chats){
   await wf(dir,chatFileName(bookId,profileId),JSON.stringify(chats,null,2));
 }
 
-// Notes
+async function loadGlobalChats(dir,profileId){
+  const txt=await rf(dir,globalChatFileName(profileId));
+  if(!txt) return [];
+  try{
+    const parsed = JSON.parse(txt);
+    return Array.isArray(parsed) ? parsed : [];
+  }catch{
+    return [];
+  }
+}
+
+async function saveGlobalChats(dir,profileId,chats){
+  await wf(dir,globalChatFileName(profileId),JSON.stringify(chats,null,2));
+}
+
+// ─── Notes ────────────────────────────────────────────────────────────────────
 async function loadNotes(dir,bookId,profileId){
   const txt=await rf(dir,noteFileName(bookId,profileId));
   if(!txt) return [];
@@ -301,7 +337,7 @@ async function saveNotes(dir,bookId,profileId,notes){
   await wf(dir,noteFileName(bookId,profileId),JSON.stringify(notes,null,2));
 }
 
-// Stats
+// ─── Stats ────────────────────────────────────────────────────────────────────
 async function loadStats(dir){
   const txt=await rf(dir,"stats.json");
   if(!txt) return { consultations:{} };
@@ -323,7 +359,7 @@ async function saveStats(dir,stats){
   },null,2));
 }
 
-// PDF.js
+// ─── PDF.js ───────────────────────────────────────────────────────────────────
 let pdfjsOk=false;
 
 async function loadPdfLib(){
@@ -351,15 +387,13 @@ async function extractPdf(file){
     const page = await pdf.getPage(i);
     const c = await page.getTextContent();
     t += c.items.map(x=>x.str).join(" ") + "\n";
-    if(i % 2 === 0){
-      await new Promise(r=>setTimeout(r,0));
-    }
+    if(i % 2 === 0) await new Promise(r=>setTimeout(r,0));
     if(t.length > 130000) break;
   }
   return { text:t.slice(0,130000), pages:pdf.numPages };
 }
 
-// Claude
+// ─── Claude ───────────────────────────────────────────────────────────────────
 async function callClaude(apiKey,system,messages,maxTok=1200){
   const r=await fetch("https://api.anthropic.com/v1/messages",{
     method:"POST",
@@ -406,13 +440,13 @@ ${(texts[b.id] || "").slice(0,Math.max(per,1500))}`;
 
 const sysSummary=title=>`Leia o trecho do livro "${title}" e escreva um resumo em 3 frases em português: (1) do que trata, (2) para quem é ideal, (3) principal aprendizado. Apenas as 3 frases, sem introdução.`;
 
-// Theme
+// ─── Theme ────────────────────────────────────────────────────────────────────
 const C = {
   bg:"#f7f5f2", surf:"#ffffff", card:"#f0ede8", cardH:"#e8e4de",
   border:"#e2ddd7", borderL:"#ece9e4",
   ink:"#1a1614", inkD:"#3d3530", inkF:"#8c8076",
 
-  sb:"#1a2d45", sbSurf:"#223858", sbBorder:"#2d4a6e",
+  sb:"#1a2d45", sbSurf:"#223858", sbSurfStrong:"#294466", sbBorder:"#2d4a6e",
   sbInk:"#ffffff", sbInkD:"rgba(255,255,255,.82)", sbInkF:"rgba(255,255,255,.62)",
 
   accent:"#2d6be4", accentBg:"rgba(45,107,228,.08)", accentBrd:"rgba(45,107,228,.25)",
@@ -423,7 +457,7 @@ const C = {
 const SPINES=["#1e4a72","#522870","#7a2020","#1a5c3a","#6e5010","#1e3e70","#6e2050","#2e5c10","#5a5010","#1a5c58"];
 const spineC=id=>SPINES[Math.abs(String(id).split("").reduce((a,c)=>a+c.charCodeAt(0),0)) % SPINES.length];
 
-// Icons
+// ─── Icons ────────────────────────────────────────────────────────────────────
 const Ico=({d,sz=16,col,style={}})=>(
   <svg width={sz} height={sz} viewBox="0 0 24 24" fill="none" stroke={col||"currentColor"} strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" style={style}>
     <path d={d}/>
@@ -456,7 +490,7 @@ const D = {
   play:"M5 3l14 9-14 9V3z",
   save:"M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2zM17 21v-8H7v8M7 3v5h8",
 };
-// Base styles
+  // ─── Base styles ──────────────────────────────────────────────────────────────
 const ov = {
   position:"fixed", inset:0, background:"rgba(10,20,40,.55)",
   display:"flex", alignItems:"center", justifyContent:"center",
@@ -508,7 +542,7 @@ const sbLb = {
   fontSize:10, letterSpacing:"0.12em", textTransform:"uppercase", color:C.sbInkF, fontWeight:600
 };
 
-// TagInput
+// ─── TagInput ─────────────────────────────────────────────────────────────────
 function TagInput({tags,onChange}){
   const [draft,setDraft]=useState("");
   const ref=useRef();
@@ -579,7 +613,7 @@ function TagInput({tags,onChange}){
   );
 }
 
-// BookModal
+// ─── BookModal ────────────────────────────────────────────────────────────────
 function BookModal({mode,initial,categories,onSave,onClose,uploading,prog,err}){
   const [d,setD]=useState({
     title:"",
@@ -648,7 +682,7 @@ function BookModal({mode,initial,categories,onSave,onClose,uploading,prog,err}){
   );
 }
 
-// Category modal
+// ─── Category Modal ───────────────────────────────────────────────────────────
 function CatModal({categories,onSave,onClose}){
   const [cats,setCats]=useState([...categories]);
   const [nv,setNv]=useState("");
@@ -741,7 +775,7 @@ function CatModal({categories,onSave,onClose}){
   );
 }
 
-// Wishlist modal
+// ─── Wishlist Modal ───────────────────────────────────────────────────────────
 function WishModal({item,onSave,onClose}){
   const [d,setD]=useState({ title:"", author:"", link:"", ...(item||{}) });
   const set=(k,v)=>setD(p=>({...p,[k]:v}));
@@ -777,7 +811,7 @@ function WishModal({item,onSave,onClose}){
   );
 }
 
-// Note Card
+// ─── Note Card ────────────────────────────────────────────────────────────────
 function NoteCard({note,onEdit,onDelete,readonly=false,ownerName=""}){
   return(
     <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:8,padding:"10px 12px",marginBottom:8}}>
@@ -803,7 +837,7 @@ function NoteCard({note,onEdit,onDelete,readonly=false,ownerName=""}){
     </div>
   );
 }
-  // Notes Panel
+  // ─── Notes Panel ──────────────────────────────────────────────────────────────
 function NotesPanel({dirHandle,bookId,profileId,otherProfiles,onNotesPresenceChange}){
   const [myNotes,setMyNotes]=useState([]);
   const [saved,setSaved]=useState(true);
@@ -896,7 +930,7 @@ function NotesPanel({dirHandle,bookId,profileId,otherProfiles,onNotesPresenceCha
           onChange={e=>setDraft(e.target.value)}
           placeholder="Escreva uma nota"
           style={{
-            ...fi, resize:"vertical", minHeight:70, lineHeight:1.65, fontSize:14,
+            ...fi, resize:"vertical", minHeight:66, lineHeight:1.65, fontSize:14,
             border:"none", background:"transparent", padding:0
           }}
         />
@@ -1004,7 +1038,7 @@ function NotesPanel({dirHandle,bookId,profileId,otherProfiles,onNotesPresenceCha
   );
 }
 
-// ChatArea
+// ─── ChatArea ─────────────────────────────────────────────────────────────────
 function ChatArea({messages,loading,onSend,placeholder,emptyNode,onExport}){
   const [input,setInput]=useState("");
   const endRef=useRef();
@@ -1133,8 +1167,8 @@ function ChatArea({messages,loading,onSend,placeholder,emptyNode,onExport}){
   );
 }
 
-// ChatHistory
-function ChatHistory({sessions,otherSessions,activeId,onSelect,onNew,otherProfileNames=[]}){
+// ─── ChatHistory ──────────────────────────────────────────────────────────────
+function ChatHistory({sessions,otherSessions,activeId,onSelect,onNew,otherProfileNames=[], title="Conversas anteriores"}){
   const [tab,setTab]=useState("mine");
   const allOther=Object.entries(otherSessions || {}).flatMap(([p,ss])=>ss.map(s=>({...s,_profile:p})));
   const hasOther=allOther.length>0;
@@ -1152,7 +1186,7 @@ function ChatHistory({sessions,otherSessions,activeId,onSelect,onNew,otherProfil
       onClick={()=>onSelect(s)}
       style={{
         textAlign:"left",
-        padding:"7px 10px",
+        padding:"6px 10px",
         borderRadius:6,
         border:`1px solid ${s.id===activeId?C.accentBrd:"transparent"}`,
         background:s.id===activeId?C.accentBg:"none",
@@ -1165,12 +1199,12 @@ function ChatHistory({sessions,otherSessions,activeId,onSelect,onNew,otherProfil
         width:"100%"
       }}
     >
-      <Ico d={D.chat} sz={13} col={s.id===activeId?C.accent:C.inkF}/>
+      <Ico d={D.chat} sz={12} col={s.id===activeId?C.accent:C.inkF}/>
       <span style={{flex:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
         {s.title || "Sem título"}
       </span>
-      {showProfile && <span style={{fontSize:11,color:C.gold,flexShrink:0,fontStyle:"italic"}}>{s._profile}</span>}
-      <span style={{fontSize:11,color:C.inkF,flexShrink:0}}>{s.date}</span>
+      {showProfile && <span style={{fontSize:10,color:C.gold,flexShrink:0,fontStyle:"italic"}}>{s._profile}</span>}
+      <span style={{fontSize:10,color:C.inkF,flexShrink:0}}>{s.date}</span>
     </button>
   );
 
@@ -1203,7 +1237,7 @@ function ChatHistory({sessions,otherSessions,activeId,onSelect,onNew,otherProfil
               ))}
             </div>
           ) : (
-            <span>Conversas anteriores</span>
+            <span>{title}</span>
           )}
         </div>
 
@@ -1212,7 +1246,7 @@ function ChatHistory({sessions,otherSessions,activeId,onSelect,onNew,otherProfil
         </button>
       </div>
 
-      <div style={{display:"flex",flexDirection:"column",gap:3,maxHeight:140,overflowY:"auto"}}>
+      <div style={{display:"flex",flexDirection:"column",gap:3,maxHeight:120,overflowY:"auto"}}>
         {tab==="mine" && sessions.map(s=>renderSession(s,false))}
         {tab==="other" && (
           allOther.length===0
@@ -1223,10 +1257,10 @@ function ChatHistory({sessions,otherSessions,activeId,onSelect,onNew,otherProfil
     </div>
   );
 }
-  // HomePage
+  // ─── HomePage ─────────────────────────────────────────────────────────────────
 function HomePage({
   visibleBooks, allBooks, wishlist,onAddWish,onEditWish,onDeleteWish,lastBook,onContinue,
-  stats,onOpenBook,onEditBook,onDeleteBook
+  stats,onOpenBook,onEditBook,onDeleteBook,onClearFilters,hasActiveFilter,onAddBook
 }){
   const [sortCol,setSortCol]=useState("addedAt");
   const [sortAsc,setSortAsc]=useState(false);
@@ -1279,9 +1313,21 @@ function HomePage({
 
   return(
     <div style={{flex:1,overflowY:"auto",padding:"36px 40px"}}>
-      <div style={{marginBottom:28}}>
-        <h1 style={{fontSize:36,fontWeight:700,color:C.ink,lineHeight:1}}>Mynd Library</h1>
-        <p style={{fontSize:16,color:C.inkF,marginTop:8}}>Seu acervo pessoal.</p>
+      <div style={{marginBottom:28,display:"flex",alignItems:"flex-start",justifyContent:"space-between",gap:16,flexWrap:"wrap"}}>
+        <div>
+          <h1 style={{fontSize:36,fontWeight:700,color:C.ink,lineHeight:1}}>Mynd Library</h1>
+          <p style={{fontSize:16,color:C.inkF,marginTop:8}}>Seu acervo pessoal.</p>
+        </div>
+        <button
+          onClick={onAddBook}
+          style={{
+            display:"flex",alignItems:"center",gap:8,background:C.accent,border:"none",
+            color:C.surf,padding:"11px 16px",borderRadius:9,cursor:"pointer",
+            fontSize:14,fontWeight:700,boxShadow:"0 8px 20px rgba(45,107,228,.18)"
+          }}
+        >
+          <Ico d={D.plus} sz={15} col={C.surf}/> Adicionar livro
+        </button>
       </div>
 
       {lastBook && (
@@ -1320,7 +1366,7 @@ function HomePage({
             <table style={{width:"100%",borderCollapse:"collapse",fontSize:14,tableLayout:"fixed"}}>
               <thead>
                 <tr style={{borderBottom:`1px solid ${C.border}`}}>
-                  {[["title","Nome"],["author","Autor"],["category","Categoria"],["tags","Tags"],["addedAt","Data"]].map(([col,label])=>(
+                  {[["title","Nome"],["author","Autor"],["pages","Páginas"],["category","Categoria"],["tags","Tags"],["addedAt","Data"]].map(([col,label])=>(
                     <th
                       key={col}
                       onClick={()=>toggleSort(col)}
@@ -1345,38 +1391,53 @@ function HomePage({
                 </tr>
               </thead>
               <tbody>
-                {sorted.map(b=>(
-                  <tr key={b.id} style={{borderBottom:`1px solid ${C.borderL}`}}>
-                    <td style={{padding:"11px 12px",color:C.ink,fontWeight:600,verticalAlign:"top"}}>
-                      <div title={b.title}>{truncateText(b.title,42)}</div>
-                    </td>
-                    <td style={{padding:"11px 12px",color:C.inkD,verticalAlign:"top"}}>
-                      <div title={b.author || ""}>{b.author ? truncateText(b.author,28) : "—"}</div>
-                    </td>
-                    <td style={{padding:"11px 12px",verticalAlign:"top"}}>
-                      {b.category ? <span style={{...tp,fontSize:11}}>{b.category}</span> : "—"}
-                    </td>
-                    <td style={{padding:"11px 12px",color:C.inkF,verticalAlign:"top",minWidth:220}}>
-                      <div title={joinTags(b.tags||[])} style={{lineHeight:1.5}}>
-                        {truncateText(joinTags(b.tags||[]), 42)}
-                      </div>
-                    </td>
-                    <td style={{padding:"11px 12px",color:C.inkF,fontSize:13,verticalAlign:"top"}}>
-                      {b.addedAt ? new Date(b.addedAt).toLocaleDateString("pt-BR") : "—"}
-                    </td>
-                    <td style={{padding:"11px 12px",verticalAlign:"top"}}>
-                      <div style={{display:"flex",gap:7,alignItems:"center",flexWrap:"wrap"}}>
-                        <button onClick={()=>onOpenBook(b)} style={{...bI,padding:"5px 10px",fontSize:12,fontWeight:600,color:C.inkD}}>Abrir</button>
-                        <button onClick={()=>onEditBook(b)} style={{...bI,padding:"5px 9px"}}><Ico d={D.edit} sz={13}/></button>
-                        <button onClick={()=>onDeleteBook(b)} style={{...bI,padding:"5px 9px",color:C.red,borderColor:C.red+"44"}}><Ico d={D.trash} sz={13}/></button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
+                {sorted.map(b=>{
+                  const c = catStyle(b.category);
+                  return (
+                    <tr key={b.id} style={{borderBottom:`1px solid ${C.borderL}`, transition:"background .15s"}} onMouseEnter={e=>e.currentTarget.style.background="#faf9f7"} onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
+                      <td style={{padding:"11px 12px",color:C.ink,fontWeight:600,verticalAlign:"top"}}>
+                        <div title={b.title}>{truncateText(b.title,42)}</div>
+                      </td>
+                      <td style={{padding:"11px 12px",color:C.inkD,verticalAlign:"top"}}>
+                        <div title={b.author || ""}>{b.author ? truncateText(b.author,28) : "—"}</div>
+                      </td>
+                      <td style={{padding:"11px 12px",color:C.inkF,fontSize:13,verticalAlign:"top"}}>
+                        {b.pages ? `${b.pages} pág.` : "—"}
+                      </td>
+                      <td style={{padding:"11px 12px",verticalAlign:"top"}}>
+                        {b.category ? <span style={{fontSize:11,padding:"3px 9px",borderRadius:12,background:c.bg,color:c.ink,border:`1px solid ${c.brd}`,fontWeight:600}}>{b.category}</span> : "—"}
+                      </td>
+                      <td style={{padding:"11px 12px",color:C.inkF,verticalAlign:"top",minWidth:220}}>
+                        <div title={joinTags(b.tags||[])} style={{lineHeight:1.5}}>
+                          {truncateText(joinTags(b.tags||[]), 42)}
+                        </div>
+                      </td>
+                      <td style={{padding:"11px 12px",color:C.inkF,fontSize:13,verticalAlign:"top"}}>
+                        {b.addedAt ? new Date(b.addedAt).toLocaleDateString("pt-BR") : "—"}
+                      </td>
+                      <td style={{padding:"11px 12px",verticalAlign:"top"}}>
+                        <div style={{display:"flex",gap:7,alignItems:"center",flexWrap:"wrap"}}>
+                          <button onClick={()=>onOpenBook(b)} style={{...bI,padding:"5px 10px",fontSize:12,fontWeight:600,color:C.inkD}}>Abrir</button>
+                          <button onClick={()=>onEditBook(b)} style={{...bI,padding:"5px 9px"}}><Ico d={D.edit} sz={13}/></button>
+                          <button onClick={()=>onDeleteBook(b)} style={{...bI,padding:"5px 9px",color:C.red,borderColor:C.red+"44"}}><Ico d={D.trash} sz={13}/></button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
                 {sorted.length===0 && (
                   <tr>
-                    <td colSpan="6" style={{padding:"16px 12px",color:C.inkF,fontStyle:"italic"}}>
-                      Nenhum livro corresponde aos filtros atuais.
+                    <td colSpan="7" style={{padding:"18px 12px"}}>
+                      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:12,flexWrap:"wrap"}}>
+                        <span style={{color:C.inkF,fontStyle:"italic"}}>
+                          Nenhum livro corresponde aos filtros atuais.
+                        </span>
+                        {hasActiveFilter && (
+                          <button onClick={onClearFilters} style={{...bG,fontSize:13,padding:"7px 12px"}}>
+                            Limpar filtros
+                          </button>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 )}
@@ -1429,7 +1490,7 @@ function HomePage({
   );
 }
 
-// Setup
+// ─── Setup ────────────────────────────────────────────────────────────────────
 function Setup({onReady}){
   const [apiKey,setKey]=useState(()=>localStorage.getItem("mynd_apikey") || "");
   const [dir,setDir]=useState(null);
@@ -1532,7 +1593,7 @@ function Setup({onReady}){
   );
 }
 
-// ProfileSwitcher
+// ─── ProfileSwitcher ──────────────────────────────────────────────────────────
 function ProfileSwitcher({userName,onSwitch,profiles=[]}){
   const [open,setOpen]=useState(false);
   const [custom,setCustom]=useState("");
@@ -1584,7 +1645,7 @@ function ProfileSwitcher({userName,onSwitch,profiles=[]}){
   );
 }
 
-// Sidebar
+// ─── Sidebar ──────────────────────────────────────────────────────────────────
 function Sidebar({
   dirHandle,
   userName,
@@ -1613,10 +1674,10 @@ function Sidebar({
   handleFilePick
 }){
   return(
-    <aside style={{width:285,minWidth:285,background:C.sb,borderRight:`1px solid ${C.sbBorder}`,display:"flex",flexDirection:"column",overflowY:"auto"}}>
-      <div style={{padding:"16px 14px 12px",borderBottom:`1px solid ${C.sbBorder}`}}>
+    <aside style={{width:296,minWidth:296,background:C.sb,borderRight:`1px solid ${C.sbBorder}`,display:"flex",flexDirection:"column",overflow:"hidden"}}>
+      <div style={{padding:"16px 14px 12px",borderBottom:`1px solid ${C.sbBorder}`,flexShrink:0}}>
         <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:4,gap:8}}>
-          <div style={{fontSize:19,fontWeight:700,color:C.sbInk,display:"flex",alignItems:"center",gap:8}}>
+          <div style={{fontSize:19,fontWeight:700,color:C.sbInk,display:"flex",alignItems:"center",gap:8,whiteSpace:"nowrap"}}>
             <Ico d={D.book} sz={17} col={C.sbInk}/> Mynd Library
           </div>
           <ProfileSwitcher userName={userName} onSwitch={switchProfile} profiles={profiles}/>
@@ -1624,7 +1685,7 @@ function Sidebar({
         <div style={{...sbLb,marginTop:3}}>{dirHandle.name}</div>
       </div>
 
-      <div style={{padding:"10px 10px 8px",borderBottom:`1px solid ${C.sbBorder}`}}>
+      <div style={{padding:"10px 10px 8px",borderBottom:`1px solid ${C.sbBorder}`,flexShrink:0}}>
         {[
           {id:"home",label:"Página inicial",icon:D.home,fn:()=>setScreen("home")},
           {id:"global",label:"Pesquisar na biblioteca",icon:D.globe,fn:openGlobal},
@@ -1644,169 +1705,186 @@ function Sidebar({
         ))}
       </div>
 
-      <div style={{padding:"10px 11px 8px",borderBottom:`1px solid ${C.sbBorder}`}}>
-        <div style={{...sbLb,marginBottom:7,display:"flex",alignItems:"center",gap:6}}>
-          <Ico d={D.search} sz={10}/> Pesquisar um livro
-        </div>
-
-        <div style={{display:"flex",alignItems:"center",gap:7,background:"rgba(0,0,0,.2)",border:`1px solid ${searchDraft.trim()?"rgba(255,255,255,.45)":C.sbBorder}`,borderRadius:6,padding:"7px 10px",marginBottom:10}}>
-          <Ico d={D.search} sz={13} col={C.sbInk}/>
-          <input
-            value={searchDraft}
-            onChange={e=>setSearchDraft(e.target.value)}
-            placeholder="Título ou autor…"
-            style={{flex:1,background:"none",border:"none",outline:"none",color:C.sbInk,fontSize:13,minWidth:0}}
-          />
-          {searchDraft && (
-            <button onClick={()=>setSearchDraft("")} style={{background:"none",border:"none",cursor:"pointer",color:C.sbInk,display:"flex"}}>
-              <Ico d={D.close} sz={12}/>
-            </button>
-          )}
-        </div>
-
-        <div style={{...sbLb,marginBottom:6,display:"flex",alignItems:"center",gap:4}}>
-          <Ico d={D.tag} sz={10}/> Pesquisa por tag
-        </div>
-
-        <div style={{display:"flex",alignItems:"center",gap:7,background:"rgba(0,0,0,.2)",border:`1px solid ${tagDraft.trim()?"rgba(255,255,255,.45)":C.sbBorder}`,borderRadius:6,padding:"7px 10px",marginBottom:8}}>
-          <Ico d={D.tag} sz={13} col={C.sbInk}/>
-          <input
-            value={tagDraft}
-            onChange={e=>setTagDraft(e.target.value)}
-            placeholder="Digite uma tag…"
-            style={{flex:1,background:"none",border:"none",outline:"none",color:C.sbInk,fontSize:13,minWidth:0}}
-          />
-          {tagDraft && (
-            <button onClick={()=>setTagDraft("")} style={{background:"none",border:"none",cursor:"pointer",color:C.sbInk,display:"flex"}}>
-              <Ico d={D.close} sz={12}/>
-            </button>
-          )}
-        </div>
-
-        {allTags.length > 0 && (
-          <div style={{marginBottom:10}}>
-            <div style={{...sbLb,marginBottom:6,display:"flex",alignItems:"center",gap:4}}>
-              <Ico d={D.tag} sz={10}/> Tags disponíveis
-            </div>
-            <div style={{display:"flex",flexWrap:"wrap",gap:5,maxHeight:90,overflowY:"auto"}}>
-              {allTags.map(t=>(
-                <button
-                  key={t}
-                  onClick={()=>setTagDraft(t)}
-                  style={{
-                    fontSize:11,padding:"2px 8px",borderRadius:10,cursor:"pointer",
-                    border:`1px solid ${tagDraft.toLowerCase()===t.toLowerCase()?"rgba(255,255,255,.75)":"rgba(255,255,255,.28)"}`,
-                    background:tagDraft.toLowerCase()===t.toLowerCase()?"rgba(255,255,255,.18)":"rgba(255,255,255,.08)",
-                    color:C.sbInk,fontWeight:600
-                  }}
-                >
-                  {t}
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
-
-        <div>
-          <div style={{...sbLb,marginBottom:6,display:"flex",alignItems:"center",justifyContent:"space-between"}}>
-            <span style={{display:"flex",alignItems:"center",gap:4}}><Ico d={D.list} sz={10}/> Categorias</span>
-            <button onClick={()=>setModal({type:"cats"})} title="Gerenciar categorias" style={{background:"none",border:"none",cursor:"pointer",color:C.sbInk,display:"flex",padding:2}}>
-              <Ico d={D.edit} sz={11}/>
-            </button>
+      <div style={{flex:1,overflowY:"auto",minHeight:0}}>
+        <div style={{padding:"10px 11px 8px",borderBottom:`1px solid ${C.sbBorder}`}}>
+          <div style={{...sbLb,marginBottom:7,display:"flex",alignItems:"center",gap:6}}>
+            <Ico d={D.search} sz={10}/> Pesquisar um livro
           </div>
 
-          <div style={{display:"flex",flexDirection:"column",gap:1}}>
-            {["Todas", ...cats].map(cat=>{
-              const active = (cat==="Todas" && !selectedCategory) || (cat!=="Todas" && selectedCategory===cat);
-              return (
-                <button
-                  key={cat}
-                  onClick={()=>{
-                    if(cat==="Todas"){
-                      setSelectedCategory("");
-                      return;
-                    }
-                    setSelectedCategory(cat);
-                  }}
-                  style={{
-                    display:"flex",alignItems:"center",justifyContent:"space-between",
-                    padding:"5px 9px",borderRadius:6,cursor:"pointer",border:"none",
-                    background:active ? C.sbSurf : "none",
-                    color:active ? C.sbInk : C.sbInkD,
-                    fontSize:12,textAlign:"left",fontWeight:cat==="Todas" ? 700 : 500
-                  }}
-                >
-                  <span>{cat}</span>
-                  <span style={{fontSize:11,color:C.sbInkF}}>
-                    {cat==="Todas" ? books.length : (catCounts[cat] || 0)}
-                  </span>
-                </button>
-              );
-            })}
+          <div style={{display:"flex",alignItems:"center",gap:7,background:"rgba(0,0,0,.2)",border:`1px solid ${searchDraft.trim()?"rgba(255,255,255,.45)":C.sbBorder}`,borderRadius:6,padding:"7px 10px",marginBottom:10}}>
+            <Ico d={D.search} sz={13} col={C.sbInk}/>
+            <input
+              value={searchDraft}
+              onChange={e=>setSearchDraft(e.target.value)}
+              placeholder="Título ou autor…"
+              style={{flex:1,background:"none",border:"none",outline:"none",color:C.sbInk,fontSize:13,minWidth:0}}
+            />
+            {searchDraft && (
+              <button onClick={()=>setSearchDraft("")} style={{background:"none",border:"none",cursor:"pointer",color:C.sbInk,display:"flex"}}>
+                <Ico d={D.close} sz={12}/>
+              </button>
+            )}
           </div>
-        </div>
 
-        {hasActiveFilter && (
-          <div style={{marginTop:8,display:"flex",alignItems:"center",gap:6,background:"rgba(255,255,255,.1)",border:"1px solid rgba(255,255,255,.18)",borderRadius:6,padding:"5px 10px"}}>
-            <span style={{fontSize:12,color:C.sbInk,flex:1}}>
-              {[searchDraft.trim() && `Busca: ${searchDraft}`, tagDraft.trim() && `Tag: ${tagDraft}`, selectedCategory && `Categoria: ${selectedCategory}`].filter(Boolean).join(" | ")}
-            </span>
-            <button onClick={clearFilters} style={{background:"none",border:"none",cursor:"pointer",color:C.sbInk,display:"flex"}}>
-              <Ico d={D.close} sz={12}/>
-            </button>
+          <div style={{...sbLb,marginBottom:6,display:"flex",alignItems:"center",gap:4}}>
+            <Ico d={D.tag} sz={10}/> Pesquisa por tag
           </div>
-        )}
-      </div>
 
-      <div style={{padding:"8px 9px 12px"}}>
-        {filteredBooks.map(b=>(
-          <div
-            key={b.id}
-            onClick={()=>openBook(b)}
-            style={{
-              display:"flex",alignItems:"flex-start",gap:8,padding:"8px 8px",borderRadius:7,cursor:"pointer",
-              border:`1px solid ${selBook?.id===b.id && screen==="book" ? "rgba(255,255,255,.45)" : "transparent"}`,
-              background:selBook?.id===b.id && screen==="book" ? C.sbSurf : "none",
-              marginBottom:2
-            }}
-          >
-            <div style={{width:4,minWidth:4,height:40,borderRadius:2,background:spineC(b.id),marginTop:2}}/>
-            <div style={{flex:1,minWidth:0}}>
-              <div style={{fontSize:13,fontWeight:600,color:C.sbInk,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>
-                {b.title}
+          <div style={{display:"flex",alignItems:"center",gap:7,background:"rgba(0,0,0,.2)",border:`1px solid ${tagDraft.trim()?"rgba(255,255,255,.45)":C.sbBorder}`,borderRadius:6,padding:"7px 10px",marginBottom:8}}>
+            <Ico d={D.tag} sz={13} col={C.sbInk}/>
+            <input
+              value={tagDraft}
+              onChange={e=>setTagDraft(e.target.value)}
+              placeholder="Digite uma tag…"
+              style={{flex:1,background:"none",border:"none",outline:"none",color:C.sbInk,fontSize:13,minWidth:0}}
+            />
+            {tagDraft && (
+              <button onClick={()=>setTagDraft("")} style={{background:"none",border:"none",cursor:"pointer",color:C.sbInk,display:"flex"}}>
+                <Ico d={D.close} sz={12}/>
+              </button>
+            )}
+          </div>
+
+          {allTags.length > 0 && (
+            <div style={{marginBottom:10}}>
+              <div style={{...sbLb,marginBottom:6,display:"flex",alignItems:"center",gap:4}}>
+                <Ico d={D.tag} sz={10}/> Tags disponíveis
               </div>
-              {b.author && (
-                <div style={{fontSize:12,color:C.sbInkD,marginTop:2,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>
-                  {b.author}
+              <div style={{display:"flex",flexWrap:"wrap",gap:5,maxHeight:90,overflowY:"auto"}}>
+                {allTags.map(t=>(
+                  <button
+                    key={t}
+                    onClick={()=>setTagDraft(t)}
+                    style={{
+                      fontSize:11,padding:"2px 8px",borderRadius:10,cursor:"pointer",
+                      border:`1px solid ${tagDraft.toLowerCase()===t.toLowerCase()?"rgba(255,255,255,.75)":"rgba(255,255,255,.28)"}`,
+                      background:tagDraft.toLowerCase()===t.toLowerCase()?"rgba(255,255,255,.18)":"rgba(255,255,255,.08)",
+                      color:C.sbInk,fontWeight:600
+                    }}
+                  >
+                    {t}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <div>
+            <div style={{...sbLb,marginBottom:6,display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+              <span style={{display:"flex",alignItems:"center",gap:4}}><Ico d={D.list} sz={10}/> Categorias</span>
+              <button onClick={()=>setModal({type:"cats"})} title="Gerenciar categorias" style={{background:"none",border:"none",cursor:"pointer",color:C.sbInk,display:"flex",padding:2}}>
+                <Ico d={D.edit} sz={11}/>
+              </button>
+            </div>
+
+            <div style={{display:"flex",flexDirection:"column",gap:1}}>
+              {["Todas", ...cats].map(cat=>{
+                const active = (cat==="Todas" && !selectedCategory) || (cat!=="Todas" && selectedCategory===cat);
+                return (
+                  <button
+                    key={cat}
+                    onClick={()=>{
+                      if(cat==="Todas"){
+                        setSelectedCategory("");
+                        return;
+                      }
+                      setSelectedCategory(cat);
+                    }}
+                    style={{
+                      display:"flex",alignItems:"center",justifyContent:"space-between",
+                      padding:"5px 9px",borderRadius:6,cursor:"pointer",border:"none",
+                      background:active ? C.sbSurf : "none",
+                      color:active ? C.sbInk : C.sbInkD,
+                      fontSize:12,textAlign:"left",fontWeight:cat==="Todas" ? 700 : 500
+                    }}
+                  >
+                    <span>{cat}</span>
+                    <span style={{fontSize:11,color:C.sbInkF}}>
+                      {cat==="Todas" ? books.length : (catCounts[cat] || 0)}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {hasActiveFilter && (
+            <div style={{marginTop:10,paddingTop:10,borderTop:`1px solid ${C.sbBorder}`}}>
+              <div style={{display:"flex",alignItems:"center",gap:6,background:"rgba(255,255,255,.1)",border:"1px solid rgba(255,255,255,.18)",borderRadius:6,padding:"6px 10px"}}>
+                <span style={{fontSize:12,color:C.sbInk,flex:1}}>
+                  {[searchDraft.trim() && `Busca: ${searchDraft}`, tagDraft.trim() && `Tag: ${tagDraft}`, selectedCategory && `Categoria: ${selectedCategory}`].filter(Boolean).join(" | ")}
+                </span>
+                <button onClick={clearFilters} style={{background:"none",border:"none",cursor:"pointer",color:C.sbInk,display:"flex"}}>
+                  <Ico d={D.close} sz={12}/>
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+
+        <div style={{padding:"8px 9px 12px"}}>
+          {filteredBooks.map(b=>{
+            const isActive = selBook?.id===b.id && screen==="book";
+            return (
+              <div
+                key={b.id}
+                onClick={()=>openBook(b)}
+                style={{
+                  display:"flex",alignItems:"stretch",gap:8,padding:"8px 8px",borderRadius:8,cursor:"pointer",
+                  border:`1px solid ${isActive ? "rgba(255,255,255,.28)" : "transparent"}`,
+                  background:isActive ? C.sbSurfStrong : "none",
+                  marginBottom:3,
+                  boxShadow:isActive ? "inset 0 0 0 1px rgba(255,255,255,.05)" : "none"
+                }}
+              >
+                <div style={{width:5,minWidth:5,borderRadius:3,background:spineC(b.id)}}/>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{fontSize:13,color:C.sbInkF,marginBottom:2}}>
+                    {b.pages ? `${b.pages} pág.` : "—"}
+                  </div>
+                  <div style={{fontSize:13,fontWeight:600,color:C.sbInk,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>
+                    {b.title}
+                  </div>
+                  {b.author && (
+                    <div style={{fontSize:12,color:C.sbInkD,marginTop:2,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>
+                      {b.author}
+                    </div>
+                  )}
+                  <div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap",marginTop:3}}>
+                    {b.category && <div style={{fontSize:10,color:C.sbInkF}}>{b.category}</div>}
+                    {b._hasNotes && <div style={{fontSize:10,color:"#c7e4ff"}}>Notas</div>}
+                  </div>
                 </div>
-              )}
-              <div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap",marginTop:3}}>
-                {b.category && <div style={{fontSize:10,color:C.sbInkF}}>{b.category}</div>}
-                {b._hasNotes && <div style={{fontSize:10,color:"#c7e4ff"}}>Notas</div>}
               </div>
-            </div>
-          </div>
-        ))}
+            );
+          })}
 
-        {!filteredBooks.length && (
-          <p style={{fontSize:13,color:C.sbInkF,padding:"10px 4px"}}>
-            {books.length===0 ? "Nenhum livro ainda." : "Sem resultados."}
-          </p>
-        )}
+          {!filteredBooks.length && (
+            <p style={{fontSize:13,color:C.sbInkF,padding:"10px 4px"}}>
+              {books.length===0 ? "Nenhum livro ainda." : "Sem resultados."}
+            </p>
+          )}
+        </div>
       </div>
 
-      <input ref={fileRef} type="file" accept=".pdf" style={{display:"none"}} onChange={handleFilePick}/>
-      <button
-        onClick={()=>fileRef.current?.click()}
-        style={{margin:"0 10px 14px",display:"flex",alignItems:"center",justifyContent:"center",gap:7,padding:"10px",border:"1px dashed rgba(255,255,255,.28)",borderRadius:7,cursor:"pointer",color:C.sbInk,fontSize:13,fontWeight:700,background:"none"}}
-      >
-        <Ico d={D.up} sz={15}/> Adicionar livro (PDF)
-      </button>
+      <div style={{padding:"12px",borderTop:`1px solid ${C.sbBorder}`,background:C.sb,flexShrink:0}}>
+        <input ref={fileRef} type="file" accept=".pdf" style={{display:"none"}} onChange={handleFilePick}/>
+        <button
+          onClick={()=>fileRef.current?.click()}
+          style={{
+            width:"100%",display:"flex",alignItems:"center",justifyContent:"center",gap:7,
+            padding:"11px 12px",border:"1px solid rgba(255,255,255,.18)",borderRadius:8,cursor:"pointer",
+            color:C.sbInk,fontSize:13,fontWeight:700,background:"rgba(255,255,255,.08)"
+          }}
+        >
+          <Ico d={D.up} sz={15}/> Adicionar livro (PDF)
+        </button>
+      </div>
     </aside>
   );
 }
 
-// Library
+// ─── Library ──────────────────────────────────────────────────────────────────
 function Library({dirHandle,apiKey,userName:initUser}){
   const [books,setBooks] = useState([]);
   const [cats,setCats] = useState([...DEF_CATS]);
@@ -1820,10 +1898,16 @@ function Library({dirHandle,apiKey,userName:initUser}){
   const [chatSessions,setChatSessions] = useState([]);
   const [otherSessions,setOtherSessions] = useState({});
   const [activeChatId,setActiveChatId] = useState(null);
+
   const [globalMsgs,setGlobalMsgs] = useState([]);
   const [globalTexts,setGlobalTexts] = useState(null);
+  const [globalSessions,setGlobalSessions] = useState([]);
+  const [otherGlobalSessions,setOtherGlobalSessions] = useState({});
+  const [activeGlobalChatId,setActiveGlobalChatId] = useState(null);
+
   const [chatLoading,setChatLoading] = useState(false);
   const [globalLoading,setGlobalLoading] = useState(false);
+  const [openingBook,setOpeningBook] = useState(false);
 
   const [searchQ,setSearchQ] = useState("");
   const [searchDraft,setSearchDraft] = useState("");
@@ -1878,12 +1962,12 @@ function Library({dirHandle,apiKey,userName:initUser}){
   },[books]);
 
   useEffect(()=>{
-    const t = setTimeout(()=>setSearchQ(searchDraft), 160);
+    const t = debounceValue(searchDraft, 160, setSearchQ);
     return ()=>clearTimeout(t);
   },[searchDraft]);
 
   useEffect(()=>{
-    const t = setTimeout(()=>setTagQuery(tagDraft), 160);
+    const t = debounceValue(tagDraft, 160, setTagQuery);
     return ()=>clearTimeout(t);
   },[tagDraft]);
 
@@ -2115,6 +2199,7 @@ function Library({dirHandle,apiKey,userName:initUser}){
   const openBook=async(book)=>{
     const freshBook = books.find(b=>b.id===book.id) || book;
 
+    setOpeningBook(true);
     setSelBook(freshBook);
     setScreen("book");
     setLastBook(freshBook);
@@ -2150,6 +2235,8 @@ function Library({dirHandle,apiKey,userName:initUser}){
       setBookMsgs([]);
       setActiveChatId(null);
     }
+
+    setOpeningBook(false);
   };
 
   const newChat=()=>{
@@ -2198,12 +2285,70 @@ function Library({dirHandle,apiKey,userName:initUser}){
   const openGlobal=async()=>{
     setScreen("global");
     setGlobalLoading(true);
+
     const t={};
     for(const b of books){
       t[b.id]=await rf(dirHandle,`${b.id}.txt`) || "";
     }
     setGlobalTexts(t);
+
+    const mine = await loadGlobalChats(dirHandle,userName);
+    setGlobalSessions(mine);
+
+    const others={};
+    for(const p of otherProfiles){
+      const ss=await loadGlobalChats(dirHandle,p);
+      if(ss.length) others[p]=ss;
+    }
+    setOtherGlobalSessions(others);
+
+    const lastId=localStorage.getItem("mynd_lastGlobalChat");
+    const last=mine.find(s=>s.id===lastId);
+    if(last){
+      setGlobalMsgs(last.messages);
+      setActiveGlobalChatId(last.id);
+    }else{
+      setGlobalMsgs([]);
+      setActiveGlobalChatId(null);
+    }
+
     setGlobalLoading(false);
+  };
+
+  const newGlobalChat=()=>{
+    setGlobalMsgs([]);
+    setActiveGlobalChatId(null);
+  };
+
+  const selectGlobalChat=s=>{
+    setGlobalMsgs(s.messages);
+    if(!s._profile){
+      setActiveGlobalChatId(s.id);
+      localStorage.setItem("mynd_lastGlobalChat",s.id);
+    }else{
+      setActiveGlobalChatId(null);
+    }
+  };
+
+  const saveCurrentGlobalChat=async(msgs)=>{
+    if(!msgs.length) return;
+
+    const firstUser=msgs.find(m=>m.role==="user");
+    const title=firstUser ? firstUser.content.slice(0,50) : "Conversa global";
+    const date=new Date().toLocaleDateString("pt-BR");
+    let sessions=[...globalSessions];
+
+    if(activeGlobalChatId){
+      sessions=sessions.map(s=>s.id===activeGlobalChatId ? {...s,messages:msgs,title,date} : s);
+    }else{
+      const id=uid();
+      sessions=[{id,title,date,messages:msgs,profileId:userName}, ...sessions];
+      setActiveGlobalChatId(id);
+      localStorage.setItem("mynd_lastGlobalChat",id);
+    }
+
+    setGlobalSessions(sessions);
+    await saveGlobalChats(dirHandle,userName,sessions);
   };
 
   const av=userName ? userName.charAt(0).toUpperCase() : "?";
@@ -2231,7 +2376,9 @@ function Library({dirHandle,apiKey,userName:initUser}){
     setChatLoading(true);
     try{
       const r=await callClaude(apiKey,sysGlobal(books,globalTexts),next);
-      setGlobalMsgs(p=>[...p,mkM("assistant",r)]);
+      const final=[...next,mkM("assistant",r)];
+      setGlobalMsgs(final);
+      await saveCurrentGlobalChat(final);
     }catch(e){
       setGlobalMsgs(p=>[...p,mkM("assistant","Erro: " + e.message + ". Tente novamente.")]);
     }
@@ -2256,6 +2403,9 @@ function Library({dirHandle,apiKey,userName:initUser}){
     if(selBook){
       const fresh = books.find(b=>b.id===selBook.id);
       if(fresh) await openBook(fresh);
+    }
+    if(screen==="global"){
+      await openGlobal();
     }
   };
 
@@ -2289,7 +2439,7 @@ function Library({dirHandle,apiKey,userName:initUser}){
   const WelcomeGlobal=()=>(
     <div style={{background:C.surf,border:`1px solid ${C.border}`,borderRadius:10,padding:"20px 24px"}}>
       <div style={{fontSize:20,fontWeight:700,color:C.accent,marginBottom:8,display:"flex",alignItems:"center",gap:8}}>
-        <Ico d={D.globe} sz={20}/> Pesquisa global
+        <Ico d={D.globe} sz={20}/> Pesquisa na biblioteca
       </div>
       <p style={{fontSize:15,color:C.inkD,lineHeight:1.7}}>
         Faça perguntas que cruzam múltiplos livros. A IA sempre indica de qual obra vem cada informação.
@@ -2356,20 +2506,26 @@ function Library({dirHandle,apiKey,userName:initUser}){
             onOpenBook={openBook}
             onEditBook={b=>{ setEditBook(b); setModal({type:"edit",initial:b}); }}
             onDeleteBook={doDelete}
+            onClearFilters={clearFilters}
+            hasActiveFilter={hasActiveFilter}
+            onAddBook={()=>fileRef.current?.click()}
           />
         )}
 
         {screen==="book" && selBook && (
           <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}}>
-            <div style={{padding:"16px 28px",borderBottom:`1px solid ${C.border}`,display:"flex",alignItems:"flex-start",gap:12,background:C.surf}}>
+            <div style={{padding:"14px 28px",borderBottom:`1px solid ${C.border}`,display:"flex",alignItems:"flex-start",gap:12,background:C.surf}}>
               <button style={bI} onClick={()=>setScreen("home")}><Ico d={D.back} sz={15}/></button>
               <div style={{flex:1}}>
-                <div style={{fontSize:24,fontWeight:700,color:C.ink}}>{selBook.title}</div>
+                <div style={{fontSize:24,fontWeight:700,color:C.ink,display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
+                  {selBook.title}
+                  {openingBook && <span style={{fontSize:12,color:C.inkF,fontWeight:500}}>Carregando…</span>}
+                </div>
                 {selBook.author && <div style={{fontSize:15,color:C.inkF,marginTop:3}}>{selBook.author}</div>}
                 <div style={{display:"flex",flexWrap:"wrap",gap:10,rowGap:6,marginTop:10,alignItems:"center"}}>
-                  {selBook.category && <span style={{...tp,fontSize:12}}>Categoria: {selBook.category}</span>}
-                  {(selBook.tags||[]).length > 0 && <span style={{fontSize:13,color:C.inkF}}>Tags: {(selBook.tags||[]).join(", ")}</span>}
-                  {selBook.pages && <span style={{fontSize:13,color:C.inkF}}>• {selBook.pages} pág.</span>}
+                  {selBook.pages ? <span style={{fontSize:13,color:C.inkF}}>{selBook.pages} pág.</span> : null}
+                  {selBook.category ? (()=>{ const c=catStyle(selBook.category); return <span style={{fontSize:12,padding:"3px 9px",borderRadius:12,background:c.bg,color:c.ink,border:`1px solid ${c.brd}`,fontWeight:600}}>{selBook.category}</span>; })() : null}
+                  {(selBook.tags||[]).length > 0 ? <span style={{fontSize:13,color:C.inkF}}>Tags: {(selBook.tags||[]).join(", ")}</span> : null}
                 </div>
               </div>
               <button style={bI} onClick={()=>{setEditBook(selBook); setModal({type:"edit",initial:selBook});}}><Ico d={D.edit} sz={14}/></button>
@@ -2377,10 +2533,10 @@ function Library({dirHandle,apiKey,userName:initUser}){
             </div>
 
             {selBook.summary && (
-              <div style={{padding:"13px 28px 0"}}>
-                <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:9,padding:"13px 20px",fontSize:15,color:C.inkD,lineHeight:1.75}}>
-                  <strong style={{fontSize:11,letterSpacing:"0.1em",textTransform:"uppercase",color:C.gold}}>Resumo </strong>
-                  {selBook.summary}
+              <div style={{padding:"12px 28px 0"}}>
+                <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:9,padding:"12px 18px",fontSize:15,color:C.inkD,lineHeight:1.78}}>
+                  <strong style={{fontSize:10,letterSpacing:"0.1em",textTransform:"uppercase",color:C.gold}}>Resumo</strong>
+                  <div style={{marginTop:6}}>{selBook.summary}</div>
                 </div>
               </div>
             )}
@@ -2400,9 +2556,10 @@ function Library({dirHandle,apiKey,userName:initUser}){
               onSelect={selectChat}
               onNew={newChat}
               otherProfileNames={otherProfiles}
+              title="Conversas anteriores"
             />
 
-            <div style={{padding:"8px 28px 0",borderBottom:`1px solid ${C.border}`,borderTop:chatSessions.length || Object.keys(otherSessions).length ? `1px solid ${C.border}` : "none"}}>
+            <div style={{padding:"6px 28px 0",borderBottom:`1px solid ${C.border}`,borderTop:chatSessions.length || Object.keys(otherSessions).length ? `1px solid ${C.border}` : "none"}}>
               <div style={{...lb,paddingBottom:7,display:"flex",alignItems:"center",gap:6}}>
                 <Ico d={D.chat} sz={11}/> Conversa {activeChatId ? "(continuando)" : "(nova)"}
               </div>
@@ -2421,7 +2578,7 @@ function Library({dirHandle,apiKey,userName:initUser}){
 
         {screen==="global" && (
           <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}}>
-            <div style={{padding:"16px 28px",borderBottom:`1px solid ${C.border}`,background:C.surf,display:"flex",alignItems:"center",gap:12}}>
+            <div style={{padding:"14px 28px",borderBottom:`1px solid ${C.border}`,background:C.surf,display:"flex",alignItems:"center",gap:12}}>
               <button style={bI} onClick={()=>setScreen("home")}><Ico d={D.back} sz={15}/></button>
               <div>
                 <div style={{fontSize:21,fontWeight:700,color:C.ink,display:"flex",alignItems:"center",gap:8}}>
@@ -2430,6 +2587,22 @@ function Library({dirHandle,apiKey,userName:initUser}){
                 <div style={{fontSize:13,color:C.inkF,marginTop:2}}>
                   {books.length} livros {globalLoading ? "| carregando…" : globalTexts ? "| pronto" : ""}
                 </div>
+              </div>
+            </div>
+
+            <ChatHistory
+              sessions={globalSessions}
+              otherSessions={otherGlobalSessions}
+              activeId={activeGlobalChatId}
+              onSelect={selectGlobalChat}
+              onNew={newGlobalChat}
+              otherProfileNames={otherProfiles}
+              title="Pesquisas anteriores"
+            />
+
+            <div style={{padding:"6px 28px 0",borderBottom:`1px solid ${C.border}`,borderTop:globalSessions.length || Object.keys(otherGlobalSessions).length ? `1px solid ${C.border}` : "none"}}>
+              <div style={{...lb,paddingBottom:7,display:"flex",alignItems:"center",gap:6}}>
+                <Ico d={D.globe} sz={11}/> Pesquisa global {activeGlobalChatId ? "(continuando)" : "(nova)"}
               </div>
             </div>
 
@@ -2455,7 +2628,7 @@ function Library({dirHandle,apiKey,userName:initUser}){
   );
 }
 
-// Root
+// ─── Root ─────────────────────────────────────────────────────────────────────
 function Root(){
   const [phase,setPhase]=useState("loading");
   const [dirHandle,setDir]=useState(null);
