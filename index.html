@@ -1,33 +1,45 @@
 <!DOCTYPE html>
 <html lang="pt-BR">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Biblioteca</title>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Mynd Library</title>
 <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
 <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
 <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-<link href="https://fonts.googleapis.com/css2?family=EB+Garamond:ital,wght@0,400;0,500;0,600;1,400;1,500&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
 * { box-sizing:border-box; margin:0; padding:0; }
-html,body,#root { height:100%; background:#f7f5f2; font-family:'EB Garamond',serif; }
+html,body,#root { height:100%; background:#f7f5f2; font-family:'Inter',sans-serif; }
+body { color:#1a1614; }
 </style>
 </head>
 <body>
 <div id="root"></div>
+
 <script type="text/babel">
 const { useState, useEffect, useRef, useMemo, useCallback } = React;
 
 // ─── Utils ────────────────────────────────────────────────────────────────────
-const uid = () => (window.crypto?.randomUUID ? window.crypto.randomUUID() : `id_${Date.now()}_${Math.random().toString(36).slice(2,9)}`);
-const safeProfileKey = (name="") => name.replace(/[^\p{L}\p{N}_-]+/gu,"_").slice(0,80) || "perfil";
-const noteFileName = (bookId, profileId) => `${bookId}_notes_${safeProfileKey(profileId)}.json`;
-const chatFileName = (bookId, profileId) => `${bookId}_chats_${safeProfileKey(profileId)}.json`;
+const uid = () => (
+  window.crypto?.randomUUID
+    ? window.crypto.randomUUID()
+    : `id_${Date.now()}_${Math.random().toString(36).slice(2,9)}`
+);
+
+const safeProfileKey = (name="") =>
+  name.replace(/[^\p{L}\p{N}_-]+/gu,"_").slice(0,80) || "perfil";
+
+const noteFileName = (bookId, profileId) =>
+  `${bookId}_notes_${safeProfileKey(profileId)}.json`;
+
+const chatFileName = (bookId, profileId) =>
+  `${bookId}_chats_${safeProfileKey(profileId)}.json`;
 
 // ─── IndexedDB ────────────────────────────────────────────────────────────────
 function openIDB(){
   return new Promise((res,rej)=>{
-    const r=indexedDB.open("bib_v5",1);
+    const r=indexedDB.open("mynd_library_v2",1);
     r.onupgradeneeded=e=>e.target.result.createObjectStore("s");
     r.onsuccess=e=>res(e.target.result);
     r.onerror=()=>rej(r.error);
@@ -37,7 +49,7 @@ async function idbGet(k){
   const db=await openIDB();
   return new Promise((res,rej)=>{
     const r=db.transaction("s","readonly").objectStore("s").get(k);
-    r.onsuccess=()=>res(r.result??null);
+    r.onsuccess=()=>res(r.result ?? null);
     r.onerror=()=>rej(r.error);
   });
 }
@@ -51,7 +63,7 @@ async function idbSet(k,v){
   });
 }
 
-// ─── FS ───────────────────────────────────────────────────────────────────────
+// ─── File System ──────────────────────────────────────────────────────────────
 async function wf(dir,name,txt){
   const fh=await dir.getFileHandle(name,{create:true});
   const w=await fh.createWritable();
@@ -79,30 +91,44 @@ async function listDirFiles(dir){
 }
 
 // ─── Index ────────────────────────────────────────────────────────────────────
-const DEF_CATS=["Ficção","Não-Ficção","Negócios","Marketing","Ciência","História","Filosofia","Técnico","Outros"];
-const DEF_PROFILES=["Eu","Minha esposa"];
+const DEF_CATS = [
+  "Ficcao",
+  "Negocios",
+  "Marketing",
+  "Biografia",
+  "Geopolitica",
+  "Current Affairs",
+  "Historia",
+  "Auto-Ajuda",
+  "Arte e Cultura"
+];
 
 async function loadIdx(dir){
-  const txt=await rf(dir,"index.json");
-  if(!txt) return {books:[],categories:[...DEF_CATS],wishlist:[],profiles:[...DEF_PROFILES]};
+  const txt = await rf(dir,"index.json");
+  if(!txt){
+    return { books:[], categories:[...DEF_CATS], wishlist:[], profiles:[] };
+  }
   try{
-    const d=JSON.parse(txt);
-    const profiles=Array.isArray(d.profiles) && d.profiles.length ? d.profiles : [...DEF_PROFILES];
+    const d = JSON.parse(txt);
+    const categories = Array.isArray(d.categories) && d.categories.length
+      ? d.categories
+      : [...DEF_CATS];
+    const profiles = Array.isArray(d.profiles) ? d.profiles.filter(Boolean) : [];
     return {
-      books:d.books||[],
-      categories:d.categories||[...DEF_CATS],
-      wishlist:d.wishlist||[],
+      books: d.books || [],
+      categories,
+      wishlist: d.wishlist || [],
       profiles
     };
   }catch{
-    return {books:[],categories:[...DEF_CATS],wishlist:[],profiles:[...DEF_PROFILES]};
+    return { books:[], categories:[...DEF_CATS], wishlist:[], profiles:[] };
   }
 }
 async function saveIdx(dir,data){
   await wf(dir,"index.json",JSON.stringify(data,null,2));
 }
 
-// ─── Chat history ─────────────────────────────────────────────────────────────
+// ─── Chats ────────────────────────────────────────────────────────────────────
 async function loadChats(dir,bookId,profileId){
   const txt=await rf(dir,chatFileName(bookId,profileId));
   if(!txt) return [];
@@ -113,7 +139,7 @@ async function loadChats(dir,bookId,profileId){
   }
 }
 async function saveChats(dir,bookId,profileId,chats){
-  await wf(dir,chatFileName(bookId,profileId),JSON.stringify(chats));
+  await wf(dir,chatFileName(bookId,profileId),JSON.stringify(chats,null,2));
 }
 
 // ─── Notes ────────────────────────────────────────────────────────────────────
@@ -124,12 +150,22 @@ async function loadNotes(dir,bookId,profileId){
     const parsed=JSON.parse(txt);
     if(Array.isArray(parsed)) return parsed;
     if(typeof parsed==="string" && parsed.trim()){
-      return [{id:uid(), text:parsed, createdAt:new Date().toISOString(), updatedAt:new Date().toISOString()}];
+      return [{
+        id:uid(),
+        text:parsed,
+        createdAt:new Date().toISOString(),
+        updatedAt:new Date().toISOString()
+      }];
     }
     return [];
   }catch{
     if(txt.trim()){
-      return [{id:uid(), text:txt, createdAt:new Date().toISOString(), updatedAt:new Date().toISOString()}];
+      return [{
+        id:uid(),
+        text:txt,
+        createdAt:new Date().toISOString(),
+        updatedAt:new Date().toISOString()
+      }];
     }
     return [];
   }
@@ -141,21 +177,24 @@ async function saveNotes(dir,bookId,profileId,notes){
 // ─── Stats ────────────────────────────────────────────────────────────────────
 async function loadStats(dir){
   const txt=await rf(dir,"stats.json");
-  if(!txt) return {consultations:{}};
+  if(!txt) return { consultations:{} };
   try{
     return JSON.parse(txt);
   }catch{
-    return {consultations:{}};
+    return { consultations:{} };
   }
 }
 async function saveStats(dir,stats){
-  await wf(dir,"stats.json",JSON.stringify(stats));
+  await wf(dir,"stats.json",JSON.stringify(stats,null,2));
 }
 
 // ─── PDF.js ───────────────────────────────────────────────────────────────────
 let pdfjsOk=false;
 async function loadPdfLib(){
-  if(pdfjsOk||window.pdfjsLib){pdfjsOk=true;return;}
+  if(pdfjsOk || window.pdfjsLib){
+    pdfjsOk=true;
+    return;
+  }
   await new Promise((res,rej)=>{
     const s=document.createElement("script");
     s.src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js";
@@ -163,19 +202,20 @@ async function loadPdfLib(){
     s.onerror=rej;
     document.head.appendChild(s);
   });
-  window.pdfjsLib.GlobalWorkerOptions.workerSrc="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+  window.pdfjsLib.GlobalWorkerOptions.workerSrc =
+    "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
   pdfjsOk=true;
 }
 async function extractPdf(file){
   await loadPdfLib();
-  const pdf=await window.pdfjsLib.getDocument({data:await file.arrayBuffer()}).promise;
+  const pdf=await window.pdfjsLib.getDocument({ data: await file.arrayBuffer() }).promise;
   let t="";
   for(let i=1;i<=pdf.numPages;i++){
     const c=await (await pdf.getPage(i)).getTextContent();
-    t+=c.items.map(x=>x.str).join(" ")+"\n";
-    if(t.length>130000) break;
+    t += c.items.map(x=>x.str).join(" ") + "\n";
+    if(t.length > 130000) break;
   }
-  return {text:t.slice(0,130000),pages:pdf.numPages};
+  return { text:t.slice(0,130000), pages:pdf.numPages };
 }
 
 // ─── Claude ───────────────────────────────────────────────────────────────────
@@ -192,36 +232,41 @@ async function callClaude(apiKey,system,messages,maxTok=1200){
       model:"claude-3-5-haiku-20241022",
       max_tokens:maxTok,
       system,
-      messages:messages.map(m=>({role:m.role,content:m.content}))
+      messages:messages.map(m=>({ role:m.role, content:m.content }))
     })
   });
   if(!r.ok){
     const e=await r.json().catch(()=>({}));
-    throw new Error(e?.error?.message||`HTTP ${r.status}`);
+    throw new Error(e?.error?.message || `HTTP ${r.status}`);
   }
-  return (await r.json()).content?.[0]?.text||"Sem resposta.";
+  return (await r.json()).content?.[0]?.text || "Sem resposta.";
 }
-const sysBook=(title,text)=>`Você é um assistente literário especializado no livro "${title}". Responda APENAS com base no conteúdo abaixo. Não use conhecimento externo. Se não encontrar, diga claramente. Responda em português, cite trechos quando útil.\n\nCONTEÚDO:\n${text.slice(0,85000)}`;
+
+const sysBook=(title,text)=>`Você é um assistente literário especializado no livro "${title}". Responda APENAS com base no conteúdo abaixo. Não use conhecimento externo. Se não encontrar, diga claramente. Responda em português e cite trechos quando útil.
+
+CONTEÚDO:
+${text.slice(0,85000)}`;
+
 const sysGlobal=(books,texts)=>{
-  const per=books.length?Math.floor(74000/books.length):0;
-  let s=`Você é assistente com acesso à biblioteca completa (${books.length} livros). Sempre indique de qual livro vem a informação. Use APENAS o conteúdo abaixo. Responda em português.\n\nBIBLIOTECA:`;
+  const per = books.length ? Math.floor(74000/books.length) : 0;
+  let s = `Você é um assistente com acesso à biblioteca completa (${books.length} livros). Sempre indique de qual livro vem a informação. Use APENAS o conteúdo abaixo. Responda em português.
+
+BIBLIOTECA:`;
   for(const b of books){
-    s+=`\n\n${"─".repeat(48)}\n📖 ${b.title}${b.author?` | ${b.author}`:""}${b.category?` [${b.category}]`:""}\n${"─".repeat(48)}\n${(texts[b.id]||"").slice(0,Math.max(per,1500))}`;
-  }
-  return s;
-};
-const sysSummary=title=>`Leia o trecho do livro "${title}" e escreva um resumo em 3 frases em português: (1) do que trata, (2) para quem é ideal, (3) principal aprendizado. Apenas as 3 frases, sem introdução.`;
-const sysConcept=(books,texts,concept)=>{
-  const per=books.length?Math.floor(70000/books.length):0;
-  let s=`Você é um assistente de pesquisa conceitual. O conceito buscado é "${concept}". Use APENAS o conteúdo dos livros abaixo. Para cada livro relevante, diga por que ele é relevante e cite o livro pelo título. Responda em português.`;
-  for(const b of books){
-    s+=`\n\n### ${b.title}${b.author?` | ${b.author}`:""}\n${(texts[b.id]||"").slice(0,Math.max(per,1200))}`;
+    s += `
+
+${"─".repeat(48)}
+📖 ${b.title}${b.author?` | ${b.author}`:""}${b.category?` [${b.category}]`:""}
+${"─".repeat(48)}
+${(texts[b.id] || "").slice(0,Math.max(per,1500))}`;
   }
   return s;
 };
 
+const sysSummary=title=>`Leia o trecho do livro "${title}" e escreva um resumo em 3 frases em português: (1) do que trata, (2) para quem é ideal, (3) principal aprendizado. Apenas as 3 frases, sem introdução.`;
+
 // ─── Theme ────────────────────────────────────────────────────────────────────
-const C={
+const C = {
   bg:"#f7f5f2", surf:"#ffffff", card:"#f0ede8", cardH:"#e8e4de",
   border:"#e2ddd7", borderL:"#ece9e4",
   ink:"#1a1614", inkD:"#3d3530", inkF:"#8c8076",
@@ -234,12 +279,17 @@ const C={
   blue:"#1e4a72", blueBg:"rgba(30,74,114,.07)", blueBrd:"rgba(30,74,114,.22)",
   green:"#1e5c2e", red:"#7a1e1e",
 };
+
 const SPINES=["#1e4a72","#522870","#7a2020","#1a5c3a","#6e5010","#1e3e70","#6e2050","#2e5c10","#5a5010","#1a5c58"];
-const spineC=id=>SPINES[Math.abs(String(id).split("").reduce((a,c)=>a+c.charCodeAt(0),0))%SPINES.length];
+const spineC=id=>SPINES[Math.abs(String(id).split("").reduce((a,c)=>a+c.charCodeAt(0),0)) % SPINES.length];
 
 // ─── Icons ────────────────────────────────────────────────────────────────────
-const Ico=({d,sz=16,col,style={}})=>(<svg width={sz} height={sz} viewBox="0 0 24 24" fill="none" stroke={col||"currentColor"} strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" style={style}><path d={d}/></svg>);
-const D={
+const Ico=({d,sz=16,col,style={}})=>(
+  <svg width={sz} height={sz} viewBox="0 0 24 24" fill="none" stroke={col||"currentColor"} strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" style={style}>
+    <path d={d}/>
+  </svg>
+);
+const D = {
   book:"M4 19.5A2.5 2.5 0 0 1 6.5 17H20M4 4.5A2.5 2.5 0 0 1 6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5z",
   up:"M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12",
   trash:"M3 6h18M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2",
@@ -267,52 +317,123 @@ const D={
 };
 
 // ─── Base styles ──────────────────────────────────────────────────────────────
-const ov={position:"fixed",inset:0,background:"rgba(10,20,40,.55)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:200,backdropFilter:"blur(3px)"};
-const mb={background:C.surf,border:`1px solid ${C.border}`,borderRadius:12,padding:28,width:520,maxWidth:"93vw",maxHeight:"90vh",overflowY:"auto",boxShadow:"0 20px 60px rgba(0,0,0,.14)"};
-const fi={width:"100%",background:C.bg,border:`1px solid ${C.border}`,borderRadius:7,padding:"10px 13px",color:C.ink,fontSize:18,outline:"none"};
-const bG={background:"none",border:`1px solid ${C.border}`,color:C.inkD,padding:"9px 20px",borderRadius:7,cursor:"pointer",fontSize:18};
-const bP=d=>({background:d?"#d0ccc8":C.accent,border:"none",color:d?"#999":C.surf,padding:"10px 24px",borderRadius:7,cursor:d?"not-allowed":"pointer",fontSize:19,fontWeight:500});
-const bI={background:"none",border:`1px solid ${C.border}`,color:C.inkF,padding:"6px",borderRadius:6,cursor:"pointer",display:"flex",alignItems:"center"};
-const lb={fontSize:12,letterSpacing:"0.13em",textTransform:"uppercase",color:C.inkF};
-const tp={fontSize:14,padding:"3px 10px",borderRadius:12,background:C.accentBg,color:C.accent,border:`1px solid ${C.accentBrd}`};
-const sbLb={fontSize:11,letterSpacing:"0.13em",textTransform:"uppercase",color:C.sbInkF};
+const ov = {
+  position:"fixed", inset:0, background:"rgba(10,20,40,.55)",
+  display:"flex", alignItems:"center", justifyContent:"center",
+  zIndex:200, backdropFilter:"blur(3px)"
+};
 
-// ─── Controlled input helper ──────────────────────────────────────────────────
-function StableInput({value,onValueChange,...rest}){
-  const [local,setLocal]=useState(value||"");
-  useEffect(()=>{setLocal(value||"");},[value]);
-  return <input {...rest} value={local} onChange={e=>{const v=e.target.value; setLocal(v); onValueChange?.(v);}}/>;
+const mb = {
+  background:C.surf, border:`1px solid ${C.border}`, borderRadius:12,
+  padding:24, width:520, maxWidth:"93vw", maxHeight:"90vh", overflowY:"auto",
+  boxShadow:"0 20px 60px rgba(0,0,0,.14)"
+};
+
+const fi = {
+  width:"100%", background:C.bg, border:`1px solid ${C.border}`, borderRadius:7,
+  padding:"10px 12px", color:C.ink, fontSize:15, outline:"none"
+};
+
+const bG = {
+  background:"none", border:`1px solid ${C.border}`, color:C.inkD,
+  padding:"8px 16px", borderRadius:7, cursor:"pointer", fontSize:14, fontWeight:500
+};
+
+const bP = d => ({
+  background:d ? "#d0ccc8" : C.accent,
+  border:"none",
+  color:d ? "#999" : C.surf,
+  padding:"9px 18px",
+  borderRadius:7,
+  cursor:d ? "not-allowed" : "pointer",
+  fontSize:14,
+  fontWeight:600
+});
+
+const bI = {
+  background:"none", border:`1px solid ${C.border}`, color:C.inkF,
+  padding:"6px", borderRadius:6, cursor:"pointer", display:"flex", alignItems:"center"
+};
+
+const lb = {
+  fontSize:11, letterSpacing:"0.12em", textTransform:"uppercase", color:C.inkF, fontWeight:600
+};
+
+const tp = {
+  fontSize:12, padding:"3px 9px", borderRadius:12,
+  background:C.accentBg, color:C.accent, border:`1px solid ${C.accentBrd}`, fontWeight:500
+};
+
+const sbLb = {
+  fontSize:10, letterSpacing:"0.12em", textTransform:"uppercase", color:C.sbInkF, fontWeight:600
+};
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+function truncateText(str="", max=70){
+  if(str.length <= max) return str;
+  return str.slice(0,max-1).trim() + "…";
 }
+
+function joinTags(tags=[]){
+  return tags.length ? tags.join(", ") : "—";
+}
+
 // ─── TagInput ─────────────────────────────────────────────────────────────────
 function TagInput({tags,onChange}){
   const [draft,setDraft]=useState("");
   const ref=useRef();
+
   const commit=useCallback(()=>{
     const t=draft.trim();
-    if(!t||tags.includes(t)){setDraft("");return;}
+    if(!t || tags.includes(t)){
+      setDraft("");
+      return;
+    }
     onChange([...tags,t]);
     setDraft("");
     setTimeout(()=>ref.current?.focus(),0);
   },[draft,tags,onChange]);
+
   return(
-    <div style={{background:C.bg,border:`1px solid ${C.border}`,borderRadius:7,padding:"8px 11px",minHeight:46}}>
-      {tags.length>0&&(
+    <div style={{background:C.bg,border:`1px solid ${C.border}`,borderRadius:7,padding:"8px 10px",minHeight:44}}>
+      {tags.length > 0 && (
         <div style={{display:"flex",flexWrap:"wrap",gap:6,marginBottom:8}}>
           {tags.map(t=>(
             <span key={t} style={{...tp,display:"flex",alignItems:"center",gap:5}}>
               {t}
-              <button type="button" onClick={e=>{e.preventDefault();onChange(tags.filter(x=>x!==t));}} style={{background:"none",border:"none",cursor:"pointer",color:C.accent,padding:0,lineHeight:1,display:"flex"}}><Ico d={D.close} sz={11}/></button>
+              <button
+                type="button"
+                onClick={e=>{e.preventDefault(); onChange(tags.filter(x=>x!==t));}}
+                style={{background:"none",border:"none",cursor:"pointer",color:C.accent,padding:0,lineHeight:1,display:"flex"}}
+              >
+                <Ico d={D.close} sz={11}/>
+              </button>
             </span>
           ))}
         </div>
       )}
       <div style={{display:"flex",gap:7,alignItems:"center"}}>
-        <input ref={ref} value={draft} onChange={e=>setDraft(e.target.value)}
-          onKeyDown={e=>{if(e.key==="Enter"){e.preventDefault();commit();}}}
+        <input
+          ref={ref}
+          value={draft}
+          onChange={e=>setDraft(e.target.value)}
+          onKeyDown={e=>{ if(e.key==="Enter"){ e.preventDefault(); commit(); } }}
           placeholder="Escreva e pressione Enter ou +"
-          style={{flex:1,background:"none",border:"none",outline:"none",color:C.ink,fontSize:17}}/>
-        <button type="button" onClick={e=>{e.preventDefault();commit();}} disabled={!draft.trim()}
-          style={{background:draft.trim()?C.accentBg:"none",border:`1px solid ${draft.trim()?C.accentBrd:C.border}`,borderRadius:5,padding:"4px 10px",cursor:draft.trim()?"pointer":"default",color:draft.trim()?C.accent:C.inkF,display:"flex",alignItems:"center"}}>
+          style={{flex:1,background:"none",border:"none",outline:"none",color:C.ink,fontSize:14}}
+        />
+        <button
+          type="button"
+          onClick={e=>{e.preventDefault(); commit();}}
+          disabled={!draft.trim()}
+          style={{
+            background:draft.trim()?C.accentBg:"none",
+            border:`1px solid ${draft.trim()?C.accentBrd:C.border}`,
+            borderRadius:5,padding:"4px 10px",
+            cursor:draft.trim()?"pointer":"default",
+            color:draft.trim()?C.accent:C.inkF,
+            display:"flex",alignItems:"center"
+          }}
+        >
           <Ico d={D.plus} sz={15}/>
         </button>
       </div>
@@ -322,57 +443,144 @@ function TagInput({tags,onChange}){
 
 // ─── BookModal ────────────────────────────────────────────────────────────────
 function BookModal({mode,initial,categories,onSave,onClose,uploading,prog,err}){
-  const [d,setD]=useState({title:"",author:"",category:categories[0]||"",tags:[],...initial});
+  const [d,setD]=useState({ title:"", author:"", category:categories[0]||"", tags:[], ...initial });
   const set=(k,v)=>setD(p=>({...p,[k]:v}));
+
   return(
-    <div style={ov} onClick={e=>{if(e.target===e.currentTarget)onClose();}}>
+    <div style={ov} onClick={e=>{ if(e.target===e.currentTarget) onClose(); }}>
       <div style={mb}>
-        <div style={{fontSize:24,fontWeight:500,color:C.ink,marginBottom:20}}>{mode==="add"?"Adicionar ao Acervo":"Editar Livro"}</div>
-        <div style={{marginBottom:14}}><div style={{...lb,marginBottom:6}}>Título *</div><input style={fi} value={d.title} onChange={e=>set("title",e.target.value)} placeholder="Título do livro"/></div>
-        <div style={{marginBottom:14}}><div style={{...lb,marginBottom:6}}>Autor</div><input style={fi} value={d.author} onChange={e=>set("author",e.target.value)} placeholder="Nome do autor"/></div>
-        <div style={{marginBottom:14}}><div style={{...lb,marginBottom:6}}>Categoria</div><select style={{...fi}} value={d.category} onChange={e=>set("category",e.target.value)}>{categories.map(c=><option key={c} style={{background:C.surf}}>{c}</option>)}</select></div>
-        <div style={{marginBottom:20}}><div style={{...lb,marginBottom:6}}>Tags</div><TagInput tags={d.tags} onChange={t=>set("tags",t)}/></div>
-        {uploading&&(<div style={{marginBottom:12}}><div style={{height:4,background:C.border,borderRadius:2,overflow:"hidden"}}><div style={{height:"100%",background:C.accent,width:`${prog}%`,transition:"width .3s",borderRadius:2}}/></div><p style={{fontSize:15,color:C.inkF,marginTop:5}}>Processando PDF e gerando resumo…</p></div>)}
-        {err&&<p style={{fontSize:15,color:C.red,marginBottom:12}}>{err}</p>}
+        <div style={{fontSize:22,fontWeight:600,color:C.ink,marginBottom:18}}>
+          {mode==="add" ? "Adicionar ao acervo" : "Editar livro"}
+        </div>
+
+        <div style={{marginBottom:14}}>
+          <div style={{...lb,marginBottom:6}}>Título *</div>
+          <input style={fi} value={d.title} onChange={e=>set("title",e.target.value)} placeholder="Título do livro" />
+        </div>
+
+        <div style={{marginBottom:14}}>
+          <div style={{...lb,marginBottom:6}}>Autor</div>
+          <input style={fi} value={d.author} onChange={e=>set("author",e.target.value)} placeholder="Nome do autor" />
+        </div>
+
+        <div style={{marginBottom:14}}>
+          <div style={{...lb,marginBottom:6}}>Categoria</div>
+          <select style={fi} value={d.category} onChange={e=>set("category",e.target.value)}>
+            {categories.map(c=>(
+              <option key={c} style={{background:C.surf}}>{c}</option>
+            ))}
+          </select>
+        </div>
+
+        <div style={{marginBottom:18}}>
+          <div style={{...lb,marginBottom:6}}>Tags</div>
+          <TagInput tags={d.tags} onChange={t=>set("tags",t)} />
+        </div>
+
+        {uploading && (
+          <div style={{marginBottom:12}}>
+            <div style={{height:4,background:C.border,borderRadius:2,overflow:"hidden"}}>
+              <div style={{height:"100%",background:C.accent,width:`${prog}%`,transition:"width .3s",borderRadius:2}}/>
+            </div>
+            <p style={{fontSize:13,color:C.inkF,marginTop:5}}>Processando PDF e gerando resumo…</p>
+          </div>
+        )}
+
+        {err && <p style={{fontSize:13,color:C.red,marginBottom:12}}>{err}</p>}
+
         <div style={{display:"flex",gap:10,justifyContent:"flex-end"}}>
           <button style={bG} onClick={onClose}>Cancelar</button>
-          <button style={bP(!d.title.trim()||uploading)} disabled={!d.title.trim()||uploading} onClick={()=>onSave(d)}>{uploading?"Processando…":mode==="add"?"Adicionar":"Salvar"}</button>
+          <button
+            style={bP(!d.title.trim() || uploading)}
+            disabled={!d.title.trim() || uploading}
+            onClick={()=>onSave(d)}
+          >
+            {uploading ? "Processando…" : mode==="add" ? "Adicionar" : "Salvar"}
+          </button>
         </div>
       </div>
     </div>
   );
 }
 
-// ─── CatModal ─────────────────────────────────────────────────────────────────
+// ─── Category Modal ───────────────────────────────────────────────────────────
 function CatModal({categories,onSave,onClose}){
   const [cats,setCats]=useState([...categories]);
   const [nv,setNv]=useState("");
   const [ed,setEd]=useState(null);
-  const add=()=>{const v=nv.trim();if(!v||cats.includes(v)){setNv("");return;}setCats(p=>[...p,v]);setNv("");};
+
+  const add=()=>{
+    const v=nv.trim();
+    if(!v || cats.includes(v)){
+      setNv("");
+      return;
+    }
+    setCats(p=>[...p,v]);
+    setNv("");
+  };
+
   return(
-    <div style={ov} onClick={e=>{if(e.target===e.currentTarget)onClose();}}>
+    <div style={ov} onClick={e=>{ if(e.target===e.currentTarget) onClose(); }}>
       <div style={{...mb,width:430}}>
-        <div style={{fontSize:24,fontWeight:500,color:C.ink,marginBottom:18}}>Gerenciar Categorias</div>
+        <div style={{fontSize:22,fontWeight:600,color:C.ink,marginBottom:18}}>Gerenciar categorias</div>
+
         <div style={{display:"flex",flexDirection:"column",gap:6,marginBottom:16}}>
           {cats.map((c,i)=>(
             <div key={i} style={{display:"flex",alignItems:"center",gap:8,background:C.card,border:`1px solid ${C.border}`,borderRadius:7,padding:"8px 10px"}}>
-              {ed?.i===i
-                ?<><input autoFocus value={ed.v} onChange={e=>setEd(p=>({...p,v:e.target.value}))} onKeyDown={e=>{if(e.key==="Enter"){const val=ed.v.trim();if(val)setCats(p=>p.map((x,j)=>j===i?val:x));setEd(null);}if(e.key==="Escape")setEd(null);}} style={{...fi,padding:"4px 8px",fontSize:16,flex:1}}/>
-                  <button style={{...bI,borderColor:C.accentBrd,color:C.accent}} onClick={()=>{const val=ed.v.trim(); if(val)setCats(p=>p.map((x,j)=>j===i?val:x)); setEd(null);}}><Ico d={D.check} sz={14}/></button>
-                  <button style={bI} onClick={()=>setEd(null)}><Ico d={D.close} sz={13}/></button>
+              {ed?.i===i ? (
+                <>
+                  <input
+                    autoFocus
+                    value={ed.v}
+                    onChange={e=>setEd(p=>({...p,v:e.target.value}))}
+                    onKeyDown={e=>{
+                      if(e.key==="Enter"){
+                        const val=ed.v.trim();
+                        if(val) setCats(p=>p.map((x,j)=>j===i?val:x));
+                        setEd(null);
+                      }
+                      if(e.key==="Escape") setEd(null);
+                    }}
+                    style={{...fi,padding:"4px 8px",fontSize:14,flex:1}}
+                  />
+                  <button
+                    style={{...bI,borderColor:C.accentBrd,color:C.accent}}
+                    onClick={()=>{
+                      const val=ed.v.trim();
+                      if(val) setCats(p=>p.map((x,j)=>j===i?val:x));
+                      setEd(null);
+                    }}
+                  >
+                    <Ico d={D.check} sz={14}/>
+                  </button>
+                  <button style={bI} onClick={()=>setEd(null)}>
+                    <Ico d={D.close} sz={13}/>
+                  </button>
                 </>
-                :<><span style={{flex:1,fontSize:18,color:C.ink}}>{c}</span>
+              ) : (
+                <>
+                  <span style={{flex:1,fontSize:15,color:C.ink}}>{c}</span>
                   <button style={bI} onClick={()=>setEd({i,v:c})}><Ico d={D.edit} sz={13}/></button>
                   <button style={{...bI,color:C.red,borderColor:C.red+"44"}} onClick={()=>setCats(p=>p.filter((_,j)=>j!==i))}><Ico d={D.trash} sz={13}/></button>
                 </>
-              }
+              )}
             </div>
           ))}
         </div>
+
         <div style={{display:"flex",gap:8,marginBottom:22}}>
-          <input value={nv} onChange={e=>setNv(e.target.value)} onKeyDown={e=>{if(e.key==="Enter")add();}} placeholder="Nova categoria…" style={{...fi,flex:1}}/>
-          <button style={bP(!nv.trim())} disabled={!nv.trim()} onClick={add}><Ico d={D.plus} sz={16}/></button>
+          <input
+            value={nv}
+            onChange={e=>setNv(e.target.value)}
+            onKeyDown={e=>{ if(e.key==="Enter") add(); }}
+            placeholder="Nova categoria…"
+            style={{...fi,flex:1}}
+          />
+          <button style={bP(!nv.trim())} disabled={!nv.trim()} onClick={add}>
+            <Ico d={D.plus} sz={16}/>
+          </button>
         </div>
+
         <div style={{display:"flex",gap:10,justifyContent:"flex-end"}}>
           <button style={bG} onClick={onClose}>Cancelar</button>
           <button style={bP(false)} onClick={()=>onSave(cats)}>Salvar</button>
@@ -382,17 +590,33 @@ function CatModal({categories,onSave,onClose}){
   );
 }
 
-// ─── WishModal ────────────────────────────────────────────────────────────────
+// ─── Wishlist Modal ───────────────────────────────────────────────────────────
 function WishModal({item,onSave,onClose}){
-  const [d,setD]=useState({title:"",author:"",link:"",...(item||{})});
+  const [d,setD]=useState({ title:"", author:"", link:"", ...(item||{}) });
   const set=(k,v)=>setD(p=>({...p,[k]:v}));
+
   return(
-    <div style={ov} onClick={e=>{if(e.target===e.currentTarget)onClose();}}>
+    <div style={ov} onClick={e=>{ if(e.target===e.currentTarget) onClose(); }}>
       <div style={{...mb,width:460}}>
-        <div style={{fontSize:24,fontWeight:500,color:C.ink,marginBottom:20}}>{item?"Editar":"Adicionar à Wishlist"}</div>
-        <div style={{marginBottom:14}}><div style={{...lb,marginBottom:6}}>Título *</div><input style={fi} value={d.title} onChange={e=>set("title",e.target.value)} placeholder="Título do livro"/></div>
-        <div style={{marginBottom:14}}><div style={{...lb,marginBottom:6}}>Autor</div><input style={fi} value={d.author} onChange={e=>set("author",e.target.value)} placeholder="Nome do autor"/></div>
-        <div style={{marginBottom:22}}><div style={{...lb,marginBottom:6}}>Link para compra</div><input style={fi} value={d.link} onChange={e=>set("link",e.target.value)} placeholder="https://…"/></div>
+        <div style={{fontSize:22,fontWeight:600,color:C.ink,marginBottom:18}}>
+          {item ? "Editar item da wishlist" : "Adicionar à wishlist"}
+        </div>
+
+        <div style={{marginBottom:14}}>
+          <div style={{...lb,marginBottom:6}}>Título *</div>
+          <input style={fi} value={d.title} onChange={e=>set("title",e.target.value)} placeholder="Título do livro" />
+        </div>
+
+        <div style={{marginBottom:14}}>
+          <div style={{...lb,marginBottom:6}}>Autor</div>
+          <input style={fi} value={d.author} onChange={e=>set("author",e.target.value)} placeholder="Nome do autor" />
+        </div>
+
+        <div style={{marginBottom:22}}>
+          <div style={{...lb,marginBottom:6}}>Link de compra</div>
+          <input style={fi} value={d.link} onChange={e=>set("link",e.target.value)} placeholder="https://…" />
+        </div>
+
         <div style={{display:"flex",gap:10,justifyContent:"flex-end"}}>
           <button style={bG} onClick={onClose}>Cancelar</button>
           <button style={bP(!d.title.trim())} disabled={!d.title.trim()} onClick={()=>onSave(d)}>Salvar</button>
@@ -401,414 +625,628 @@ function WishModal({item,onSave,onClose}){
     </div>
   );
 }
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Mynd Library</title>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+* { box-sizing:border-box; margin:0; padding:0; }
+html,body,#root { height:100%; background:#f7f5f2; font-family:'Inter',sans-serif; }
+body { color:#1a1614; }
+</style>
+</head>
+<body>
+<div id="root"></div>
 
-// ─── NoteCard ─────────────────────────────────────────────────────────────────
-function NoteCard({note,onEdit,onDelete,readonly=false}){
-  return(
-    <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:8,padding:"12px 14px",marginBottom:9}}>
-      <div style={{whiteSpace:"pre-wrap",fontSize:17,color:C.inkD,lineHeight:1.65}}>{note.text}</div>
-      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginTop:8}}>
-        <span style={{fontSize:13,color:C.inkF}}>
-          {note.updatedAt ? `Atualizada em ${new Date(note.updatedAt).toLocaleString("pt-BR")}` : ""}
-        </span>
-        {!readonly&&(
-          <div style={{display:"flex",gap:7}}>
-            <button onClick={onEdit} style={{...bI,padding:"5px 9px"}}><Ico d={D.edit} sz={13}/></button>
-            <button onClick={onDelete} style={{...bI,padding:"5px 9px",color:C.red,borderColor:C.red+"44"}}><Ico d={D.trash} sz={13}/></button>
-          </div>
-        )}
-      </div>
-    </div>
-  );
+<script type="text/babel">
+const { useState, useEffect, useRef, useMemo, useCallback } = React;
+
+// ─── Utils ────────────────────────────────────────────────────────────────────
+const uid = () => (
+  window.crypto?.randomUUID
+    ? window.crypto.randomUUID()
+    : `id_${Date.now()}_${Math.random().toString(36).slice(2,9)}`
+);
+
+const safeProfileKey = (name="") =>
+  name.replace(/[^\p{L}\p{N}_-]+/gu,"_").slice(0,80) || "perfil";
+
+const noteFileName = (bookId, profileId) =>
+  `${bookId}_notes_${safeProfileKey(profileId)}.json`;
+
+const chatFileName = (bookId, profileId) =>
+  `${bookId}_chats_${safeProfileKey(profileId)}.json`;
+
+// ─── IndexedDB ────────────────────────────────────────────────────────────────
+function openIDB(){
+  return new Promise((res,rej)=>{
+    const r=indexedDB.open("mynd_library_v2",1);
+    r.onupgradeneeded=e=>e.target.result.createObjectStore("s");
+    r.onsuccess=e=>res(e.target.result);
+    r.onerror=()=>rej(r.error);
+  });
+}
+async function idbGet(k){
+  const db=await openIDB();
+  return new Promise((res,rej)=>{
+    const r=db.transaction("s","readonly").objectStore("s").get(k);
+    r.onsuccess=()=>res(r.result ?? null);
+    r.onerror=()=>rej(r.error);
+  });
+}
+async function idbSet(k,v){
+  const db=await openIDB();
+  return new Promise((res,rej)=>{
+    const tx=db.transaction("s","readwrite");
+    tx.objectStore("s").put(v,k);
+    tx.oncomplete=res;
+    tx.onerror=()=>rej(tx.error);
+  });
 }
 
-// ─── NotesPanel ───────────────────────────────────────────────────────────────
-function NotesPanel({dirHandle,bookId,profileId,otherProfiles}){
-  const [myNotes,setMyNotes]=useState([]);
-  const [saved,setSaved]=useState(true);
-  const [ready,setReady]=useState(false);
-  const [viewMode,setViewMode]=useState("mine");
-  const [otherNotes,setOtherNotes]=useState({});
-  const [draft,setDraft]=useState("");
-  const [editingId,setEditingId]=useState(null);
+// ─── File System ──────────────────────────────────────────────────────────────
+async function wf(dir,name,txt){
+  const fh=await dir.getFileHandle(name,{create:true});
+  const w=await fh.createWritable();
+  await w.write(txt);
+  await w.close();
+}
+async function rf(dir,name){
+  try{
+    return await (await (await dir.getFileHandle(name)).getFile()).text();
+  }catch{
+    return null;
+  }
+}
+async function rmf(dir,name){
+  try{
+    await dir.removeEntry(name);
+  }catch{}
+}
+async function listDirFiles(dir){
+  const names=[];
+  try{
+    for await (const [name] of dir.entries()) names.push(name);
+  }catch{}
+  return names;
+}
 
-  const primaryOtherName = otherProfiles[0] || "Outro perfil";
-  const tabs = otherProfiles.length
-    ? [["mine","Minhas"],["other",primaryOtherName],["both","Ambas"]]
-    : [["mine","Minhas"]];
+// ─── Index ────────────────────────────────────────────────────────────────────
+const DEF_CATS = [
+  "Ficcao",
+  "Negocios",
+  "Marketing",
+  "Biografia",
+  "Geopolitica",
+  "Current Affairs",
+  "Historia",
+  "Auto-Ajuda",
+  "Arte e Cultura"
+];
 
-  const refreshMine=useCallback(async()=>{
-    const notes=await loadNotes(dirHandle,bookId,profileId);
-    setMyNotes(notes);
-    setReady(true);
-  },[dirHandle,bookId,profileId]);
+async function loadIdx(dir){
+  const txt = await rf(dir,"index.json");
+  if(!txt){
+    return { books:[], categories:[...DEF_CATS], wishlist:[], profiles:[] };
+  }
+  try{
+    const d = JSON.parse(txt);
+    const categories = Array.isArray(d.categories) && d.categories.length
+      ? d.categories
+      : [...DEF_CATS];
+    const profiles = Array.isArray(d.profiles) ? d.profiles.filter(Boolean) : [];
+    return {
+      books: d.books || [],
+      categories,
+      wishlist: d.wishlist || [],
+      profiles
+    };
+  }catch{
+    return { books:[], categories:[...DEF_CATS], wishlist:[], profiles:[] };
+  }
+}
+async function saveIdx(dir,data){
+  await wf(dir,"index.json",JSON.stringify(data,null,2));
+}
 
-  useEffect(()=>{ refreshMine(); },[refreshMine]);
+// ─── Chats ────────────────────────────────────────────────────────────────────
+async function loadChats(dir,bookId,profileId){
+  const txt=await rf(dir,chatFileName(bookId,profileId));
+  if(!txt) return [];
+  try{
+    return JSON.parse(txt);
+  }catch{
+    return [];
+  }
+}
+async function saveChats(dir,bookId,profileId,chats){
+  await wf(dir,chatFileName(bookId,profileId),JSON.stringify(chats,null,2));
+}
 
-  useEffect(()=>{
-    if(viewMode==="other"||viewMode==="both"){
-      const load=async()=>{
-        const result={};
-        for(const p of otherProfiles){
-          const notes=await loadNotes(dirHandle,bookId,p);
-          if(notes.length) result[p]=notes;
-        }
-        setOtherNotes(result);
-      };
-      load();
-    }
-  },[viewMode,bookId,otherProfiles,dirHandle]);
-
-  const saveList=async(next)=>{
-    setMyNotes(next);
-    setSaved(false);
-    await saveNotes(dirHandle,bookId,profileId,next);
-    setSaved(true);
-  };
-
-  const addOrUpdate=async()=>{
-    const text=draft.trim();
-    if(!text) return;
-    if(editingId){
-      const next=myNotes.map(n=>n.id===editingId?{...n,text,updatedAt:new Date().toISOString()}:n);
-      await saveList(next);
-      setEditingId(null);
-    }else{
-      const next=[{
+// ─── Notes ────────────────────────────────────────────────────────────────────
+async function loadNotes(dir,bookId,profileId){
+  const txt=await rf(dir,noteFileName(bookId,profileId));
+  if(!txt) return [];
+  try{
+    const parsed=JSON.parse(txt);
+    if(Array.isArray(parsed)) return parsed;
+    if(typeof parsed==="string" && parsed.trim()){
+      return [{
         id:uid(),
-        text,
+        text:parsed,
         createdAt:new Date().toISOString(),
         updatedAt:new Date().toISOString()
-      },...myNotes];
-      await saveList(next);
+      }];
     }
-    setDraft("");
-  };
+    return [];
+  }catch{
+    if(txt.trim()){
+      return [{
+        id:uid(),
+        text:txt,
+        createdAt:new Date().toISOString(),
+        updatedAt:new Date().toISOString()
+      }];
+    }
+    return [];
+  }
+}
+async function saveNotes(dir,bookId,profileId,notes){
+  await wf(dir,noteFileName(bookId,profileId),JSON.stringify(notes,null,2));
+}
 
-  const startEdit=(note)=>{
-    setDraft(note.text);
-    setEditingId(note.id);
-  };
+// ─── Stats ────────────────────────────────────────────────────────────────────
+async function loadStats(dir){
+  const txt=await rf(dir,"stats.json");
+  if(!txt) return { consultations:{} };
+  try{
+    return JSON.parse(txt);
+  }catch{
+    return { consultations:{} };
+  }
+}
+async function saveStats(dir,stats){
+  await wf(dir,"stats.json",JSON.stringify(stats,null,2));
+}
 
-  const removeNote=async(id)=>{
-    const next=myNotes.filter(n=>n.id!==id);
-    await saveList(next);
-    if(editingId===id){
-      setEditingId(null);
+// ─── PDF.js ───────────────────────────────────────────────────────────────────
+let pdfjsOk=false;
+async function loadPdfLib(){
+  if(pdfjsOk || window.pdfjsLib){
+    pdfjsOk=true;
+    return;
+  }
+  await new Promise((res,rej)=>{
+    const s=document.createElement("script");
+    s.src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js";
+    s.onload=res;
+    s.onerror=rej;
+    document.head.appendChild(s);
+  });
+  window.pdfjsLib.GlobalWorkerOptions.workerSrc =
+    "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+  pdfjsOk=true;
+}
+async function extractPdf(file){
+  await loadPdfLib();
+  const pdf=await window.pdfjsLib.getDocument({ data: await file.arrayBuffer() }).promise;
+  let t="";
+  for(let i=1;i<=pdf.numPages;i++){
+    const c=await (await pdf.getPage(i)).getTextContent();
+    t += c.items.map(x=>x.str).join(" ") + "\n";
+    if(t.length > 130000) break;
+  }
+  return { text:t.slice(0,130000), pages:pdf.numPages };
+}
+
+// ─── Claude ───────────────────────────────────────────────────────────────────
+async function callClaude(apiKey,system,messages,maxTok=1200){
+  const r=await fetch("https://api.anthropic.com/v1/messages",{
+    method:"POST",
+    headers:{
+      "Content-Type":"application/json",
+      "x-api-key":apiKey,
+      "anthropic-version":"2023-06-01",
+      "anthropic-dangerous-direct-browser-access":"true"
+    },
+    body:JSON.stringify({
+      model:"claude-3-5-haiku-20241022",
+      max_tokens:maxTok,
+      system,
+      messages:messages.map(m=>({ role:m.role, content:m.content }))
+    })
+  });
+  if(!r.ok){
+    const e=await r.json().catch(()=>({}));
+    throw new Error(e?.error?.message || `HTTP ${r.status}`);
+  }
+  return (await r.json()).content?.[0]?.text || "Sem resposta.";
+}
+
+const sysBook=(title,text)=>`Você é um assistente literário especializado no livro "${title}". Responda APENAS com base no conteúdo abaixo. Não use conhecimento externo. Se não encontrar, diga claramente. Responda em português e cite trechos quando útil.
+
+CONTEÚDO:
+${text.slice(0,85000)}`;
+
+const sysGlobal=(books,texts)=>{
+  const per = books.length ? Math.floor(74000/books.length) : 0;
+  let s = `Você é um assistente com acesso à biblioteca completa (${books.length} livros). Sempre indique de qual livro vem a informação. Use APENAS o conteúdo abaixo. Responda em português.
+
+BIBLIOTECA:`;
+  for(const b of books){
+    s += `
+
+${"─".repeat(48)}
+📖 ${b.title}${b.author?` | ${b.author}`:""}${b.category?` [${b.category}]`:""}
+${"─".repeat(48)}
+${(texts[b.id] || "").slice(0,Math.max(per,1500))}`;
+  }
+  return s;
+};
+
+const sysSummary=title=>`Leia o trecho do livro "${title}" e escreva um resumo em 3 frases em português: (1) do que trata, (2) para quem é ideal, (3) principal aprendizado. Apenas as 3 frases, sem introdução.`;
+
+// ─── Theme ────────────────────────────────────────────────────────────────────
+const C = {
+  bg:"#f7f5f2", surf:"#ffffff", card:"#f0ede8", cardH:"#e8e4de",
+  border:"#e2ddd7", borderL:"#ece9e4",
+  ink:"#1a1614", inkD:"#3d3530", inkF:"#8c8076",
+
+  sb:"#1a2d45", sbSurf:"#223858", sbBorder:"#2d4a6e",
+  sbInk:"#ffffff", sbInkD:"rgba(255,255,255,.82)", sbInkF:"rgba(255,255,255,.62)",
+
+  accent:"#2d6be4", accentBg:"rgba(45,107,228,.08)", accentBrd:"rgba(45,107,228,.25)",
+  gold:"#7a5a1a", goldM:"#9a7020", goldBg:"rgba(122,90,26,.08)", goldBrd:"rgba(122,90,26,.25)",
+  blue:"#1e4a72", blueBg:"rgba(30,74,114,.07)", blueBrd:"rgba(30,74,114,.22)",
+  green:"#1e5c2e", red:"#7a1e1e",
+};
+
+const SPINES=["#1e4a72","#522870","#7a2020","#1a5c3a","#6e5010","#1e3e70","#6e2050","#2e5c10","#5a5010","#1a5c58"];
+const spineC=id=>SPINES[Math.abs(String(id).split("").reduce((a,c)=>a+c.charCodeAt(0),0)) % SPINES.length];
+
+// ─── Icons ────────────────────────────────────────────────────────────────────
+const Ico=({d,sz=16,col,style={}})=>(
+  <svg width={sz} height={sz} viewBox="0 0 24 24" fill="none" stroke={col||"currentColor"} strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" style={style}>
+    <path d={d}/>
+  </svg>
+);
+const D = {
+  book:"M4 19.5A2.5 2.5 0 0 1 6.5 17H20M4 4.5A2.5 2.5 0 0 1 6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5z",
+  up:"M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12",
+  trash:"M3 6h18M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2",
+  send:"M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z",
+  back:"M19 12H5M12 5l-7 7 7 7",
+  search:"M21 21l-4.35-4.35M17 11A6 6 0 1 1 5 11a6 6 0 1 1 12 0z",
+  edit:"M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z",
+  close:"M18 6L6 18M6 6l12 12",
+  globe:"M12 22c5.523 0 10-4.477 10-10S17.523 2 12 2 2 6.477 2 12s4.477 10 10 10zM2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z",
+  tag:"M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82zM7 7h.01",
+  folder:"M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z",
+  check:"M20 6L9 17l-5-5",
+  plus:"M12 5v14M5 12h14",
+  note:"M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8zM14 2v6h6M16 13H8M16 17H8M10 9H8",
+  dl:"M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3",
+  home:"M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2zM9 22V12h6v10",
+  heart:"M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z",
+  link:"M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71",
+  list:"M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01",
+  chat:"M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z",
+  user:"M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2M12 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8z",
+  chevDown:"M6 9l6 6 6-6",
+  play:"M5 3l14 9-14 9V3z",
+  save:"M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2zM17 21v-8H7v8M7 3v5h8",
+};
+
+// ─── Base styles ──────────────────────────────────────────────────────────────
+const ov = {
+  position:"fixed", inset:0, background:"rgba(10,20,40,.55)",
+  display:"flex", alignItems:"center", justifyContent:"center",
+  zIndex:200, backdropFilter:"blur(3px)"
+};
+
+const mb = {
+  background:C.surf, border:`1px solid ${C.border}`, borderRadius:12,
+  padding:24, width:520, maxWidth:"93vw", maxHeight:"90vh", overflowY:"auto",
+  boxShadow:"0 20px 60px rgba(0,0,0,.14)"
+};
+
+const fi = {
+  width:"100%", background:C.bg, border:`1px solid ${C.border}`, borderRadius:7,
+  padding:"10px 12px", color:C.ink, fontSize:15, outline:"none"
+};
+
+const bG = {
+  background:"none", border:`1px solid ${C.border}`, color:C.inkD,
+  padding:"8px 16px", borderRadius:7, cursor:"pointer", fontSize:14, fontWeight:500
+};
+
+const bP = d => ({
+  background:d ? "#d0ccc8" : C.accent,
+  border:"none",
+  color:d ? "#999" : C.surf,
+  padding:"9px 18px",
+  borderRadius:7,
+  cursor:d ? "not-allowed" : "pointer",
+  fontSize:14,
+  fontWeight:600
+});
+
+const bI = {
+  background:"none", border:`1px solid ${C.border}`, color:C.inkF,
+  padding:"6px", borderRadius:6, cursor:"pointer", display:"flex", alignItems:"center"
+};
+
+const lb = {
+  fontSize:11, letterSpacing:"0.12em", textTransform:"uppercase", color:C.inkF, fontWeight:600
+};
+
+const tp = {
+  fontSize:12, padding:"3px 9px", borderRadius:12,
+  background:C.accentBg, color:C.accent, border:`1px solid ${C.accentBrd}`, fontWeight:500
+};
+
+const sbLb = {
+  fontSize:10, letterSpacing:"0.12em", textTransform:"uppercase", color:C.sbInkF, fontWeight:600
+};
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+function truncateText(str="", max=70){
+  if(str.length <= max) return str;
+  return str.slice(0,max-1).trim() + "…";
+}
+
+function joinTags(tags=[]){
+  return tags.length ? tags.join(", ") : "—";
+}
+
+// ─── TagInput ─────────────────────────────────────────────────────────────────
+function TagInput({tags,onChange}){
+  const [draft,setDraft]=useState("");
+  const ref=useRef();
+
+  const commit=useCallback(()=>{
+    const t=draft.trim();
+    if(!t || tags.includes(t)){
       setDraft("");
+      return;
     }
-  };
-
-  if(!ready)return null;
+    onChange([...tags,t]);
+    setDraft("");
+    setTimeout(()=>ref.current?.focus(),0);
+  },[draft,tags,onChange]);
 
   return(
-    <div style={{padding:"12px 28px 0"}}>
-      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8}}>
-        <div style={{...lb,display:"flex",alignItems:"center",gap:6}}><Ico d={D.note} sz={11}/> Notas</div>
-        <div style={{display:"flex",alignItems:"center",gap:10}}>
-          {tabs.length>1&&(
-            <div style={{display:"flex",gap:4}}>
-              {tabs.map(([m,label])=>(
-                <button key={m} onClick={()=>setViewMode(m)}
-                  style={{fontSize:13,padding:"2px 9px",borderRadius:5,border:`1px solid ${viewMode===m?C.accentBrd:C.border}`,background:viewMode===m?C.accentBg:"none",cursor:"pointer",color:viewMode===m?C.accent:C.inkF}}>
-                  {label}
-                </button>
-              ))}
-            </div>
-          )}
-          <span style={{fontSize:13,color:saved?C.green:C.inkF,transition:"color .3s"}}>{saved?"✓ salvo":"salvando…"}</span>
-        </div>
-      </div>
-
-      {(viewMode==="mine"||viewMode==="both")&&(
-        <div style={{marginBottom:viewMode==="both"?12:0}}>
-          {viewMode==="both"&&<div style={{...lb,marginBottom:5,color:C.accent,fontSize:11}}>{profileId}</div>}
-
-          <div style={{background:C.surf,border:`1px solid ${C.border}`,borderRadius:9,padding:"12px 12px 10px",marginBottom:12}}>
-            <textarea value={draft} onChange={e=>setDraft(e.target.value)}
-              placeholder="Escreva uma nota e salve separadamente"
-              style={{...fi,resize:"vertical",minHeight:90,lineHeight:1.7,fontSize:17,border:"none",background:"transparent",padding:0}}/>
-            <div style={{display:"flex",justifyContent:"flex-end",gap:8,marginTop:10}}>
-              {editingId&&<button onClick={()=>{setEditingId(null);setDraft("");}} style={bG}>Cancelar</button>}
-              <button onClick={addOrUpdate} style={bP(!draft.trim())} disabled={!draft.trim()}>
-                <Ico d={editingId?D.check:D.save} sz={15} col={draft.trim()?C.surf:"#999"} style={{marginRight:8}}/>
-                {editingId?"Salvar edição":"Salvar nota"}
+    <div style={{background:C.bg,border:`1px solid ${C.border}`,borderRadius:7,padding:"8px 10px",minHeight:44}}>
+      {tags.length > 0 && (
+        <div style={{display:"flex",flexWrap:"wrap",gap:6,marginBottom:8}}>
+          {tags.map(t=>(
+            <span key={t} style={{...tp,display:"flex",alignItems:"center",gap:5}}>
+              {t}
+              <button
+                type="button"
+                onClick={e=>{e.preventDefault(); onChange(tags.filter(x=>x!==t));}}
+                style={{background:"none",border:"none",cursor:"pointer",color:C.accent,padding:0,lineHeight:1,display:"flex"}}
+              >
+                <Ico d={D.close} sz={11}/>
               </button>
-            </div>
-          </div>
-
-          {myNotes.length===0
-            ?<p style={{fontSize:16,color:C.inkF,fontStyle:"italic",padding:"2px 0 8px"}}>Nenhuma nota salva ainda.</p>
-            :myNotes.map(note=>(
-              <NoteCard key={note.id} note={note} onEdit={()=>startEdit(note)} onDelete={()=>removeNote(note.id)}/>
-            ))
-          }
+            </span>
+          ))}
         </div>
       )}
-
-      {(viewMode==="other"||viewMode==="both")&&(
-        <div>
-          {Object.entries(otherNotes).length===0
-            ?<p style={{fontSize:16,color:C.inkF,fontStyle:"italic",padding:"8px 0"}}>Nenhuma nota de outros perfis para este livro.</p>
-            :Object.entries(otherNotes).map(([p,notes])=>(
-              <div key={p} style={{marginBottom:10}}>
-                <div style={{...lb,marginBottom:6,color:C.gold,fontSize:11}}>{p}</div>
-                {notes.map(note=><NoteCard key={note.id} note={note} readonly/>)}
-              </div>
-            ))
-          }
-        </div>
-      )}
-    </div>
-  );
-}
-// ─── ChatArea ─────────────────────────────────────────────────────────────────
-function ChatArea({messages,loading,onSend,placeholder,emptyNode,onExport}){
-  const [input,setInput]=useState("");
-  const endRef=useRef();
-  const inputRef=useRef();
-
-  useEffect(()=>{endRef.current?.scrollIntoView({behavior:"smooth"});},[messages,loading]);
-
-  const send=()=>{
-    const t=input.trim();
-    if(!t||loading)return;
-    onSend(t);
-    setInput("");
-    setTimeout(()=>inputRef.current?.focus(),0);
-  };
-  const onKey=e=>{if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();send();}};
-
-  return(
-    <>
-      <div style={{flex:1,overflowY:"auto",padding:"24px 28px",display:"flex",flexDirection:"column",gap:16}}>
-        {messages.length===0&&emptyNode}
-        {messages.map((m,i)=>(
-          <div key={i} style={{display:"flex",gap:12,flexDirection:m.role==="user"?"row-reverse":"row",alignSelf:m.role==="user"?"flex-end":"flex-start",maxWidth:780}}>
-            <div style={{width:34,height:34,minWidth:34,borderRadius:"50%",display:"flex",alignItems:"center",justifyContent:"center",fontSize:14,marginTop:3,background:m.role==="user"?"rgba(45,107,228,.12)":"rgba(122,90,26,.1)",color:m.role==="user"?C.accent:C.gold,fontWeight:600}}>
-              {m.role==="user"?m.av||"?":"✦"}
-            </div>
-            <div style={{padding:"13px 18px",borderRadius:9,fontSize:18,lineHeight:1.75,whiteSpace:"pre-wrap",background:m.role==="user"?"#eaf0fb":C.card,border:`1px solid ${m.role==="user"?C.accentBrd:C.border}`,color:C.ink}}>
-              {m.content}
-            </div>
-          </div>
-        ))}
-        {loading&&(
-          <div style={{display:"flex",gap:12,alignSelf:"flex-start"}}>
-            <div style={{width:34,height:34,borderRadius:"50%",background:"rgba(122,90,26,.1)",display:"flex",alignItems:"center",justifyContent:"center",color:C.gold,fontSize:17}}>✦</div>
-            <div style={{padding:"16px 20px",borderRadius:9,background:C.card,border:`1px solid ${C.border}`,display:"flex",gap:6,alignItems:"center"}}>
-              {[0,1,2].map(i=><span key={i} style={{width:8,height:8,borderRadius:"50%",background:C.gold,display:"inline-block",animation:`bob .9s ${i*.2}s infinite`}}/>)}
-            </div>
-          </div>
-        )}
-        <div ref={endRef}/>
-      </div>
-      <div style={{padding:"14px 28px 20px",borderTop:`1px solid ${C.border}`,background:C.surf}}>
-        {messages.length>0&&onExport&&(
-          <div style={{display:"flex",justifyContent:"flex-end",marginBottom:9}}>
-            <button onClick={onExport} style={{...bI,gap:5,fontSize:15,padding:"5px 12px"}}><Ico d={D.dl} sz={13}/> Exportar conversa</button>
-          </div>
-        )}
-        <div style={{display:"flex",gap:10,alignItems:"flex-end",background:C.bg,border:`1px solid ${C.border}`,borderRadius:9,padding:"11px 15px"}}>
-          <textarea ref={inputRef} rows={1} value={input} onChange={e=>setInput(e.target.value)} onKeyDown={onKey} placeholder={placeholder}
-            style={{flex:1,background:"none",border:"none",outline:"none",color:C.ink,fontSize:18,resize:"none",maxHeight:120,lineHeight:1.6}}/>
-          <button onClick={send} disabled={!input.trim()||loading}
-            style={{background:input.trim()&&!loading?C.accent:"#d0ccc8",border:"none",borderRadius:6,color:input.trim()&&!loading?C.surf:"#999",padding:"8px 12px",cursor:input.trim()&&!loading?"pointer":"not-allowed",display:"flex"}}>
-            <Ico d={D.send} sz={16}/>
-          </button>
-        </div>
-      </div>
-    </>
-  );
-}
-
-// ─── ChatHistory ──────────────────────────────────────────────────────────────
-function ChatHistory({sessions,otherSessions,activeId,onSelect,onNew,otherProfileNames=[]}){
-  const [tab,setTab]=useState("mine");
-  const allOther=Object.entries(otherSessions||{}).flatMap(([p,ss])=>ss.map(s=>({...s,_profile:p})));
-  const hasOther=allOther.length>0;
-  const otherTabLabel = otherProfileNames.length===1 ? otherProfileNames[0] : "Outros perfis";
-  if(!sessions.length&&!hasOther)return null;
-
-  const renderSession=(s,showProfile=false)=>(
-    <button key={`${s.id}_${showProfile?s._profile||"":""}`} onClick={()=>onSelect(s)}
-      style={{textAlign:"left",padding:"7px 10px",borderRadius:6,border:`1px solid ${s.id===activeId?C.accentBrd:"transparent"}`,background:s.id===activeId?C.accentBg:"none",cursor:"pointer",color:s.id===activeId?C.accent:C.inkD,fontSize:16,display:"flex",alignItems:"center",gap:7,width:"100%"}}>
-      <Ico d={D.chat} sz={13} col={s.id===activeId?C.accent:C.inkF}/>
-      <span style={{flex:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{s.title||"Sem título"}</span>
-      {showProfile&&<span style={{fontSize:12,color:C.gold,flexShrink:0,fontStyle:"italic"}}>{s._profile}</span>}
-      <span style={{fontSize:12,color:C.inkF,flexShrink:0}}>{s.date}</span>
-    </button>
-  );
-
-  return(
-    <div style={{padding:"10px 28px 0",borderTop:`1px solid ${C.border}`}}>
-      <div style={{...lb,marginBottom:8,display:"flex",alignItems:"center",justifyContent:"space-between"}}>
-        <div style={{display:"flex",alignItems:"center",gap:8}}>
-          <Ico d={D.chat} sz={11}/>
-          {hasOther?(
-            <div style={{display:"flex",gap:4}}>
-              {[["mine","Minhas"],["other",otherTabLabel]].map(([t,label])=>(
-                <button key={t} onClick={()=>setTab(t)}
-                  style={{fontSize:12,padding:"2px 8px",borderRadius:4,border:`1px solid ${tab===t?C.accentBrd:C.border}`,background:tab===t?C.accentBg:"none",cursor:"pointer",color:tab===t?C.accent:C.inkF,letterSpacing:"0.1em",textTransform:"uppercase"}}>
-                  {label}
-                </button>
-              ))}
-            </div>
-          ):<span>Conversas anteriores</span>}
-        </div>
-        <button onClick={onNew} style={{background:"none",border:"none",cursor:"pointer",color:C.accent,fontSize:13,display:"flex",alignItems:"center",gap:4}}>
-          <Ico d={D.plus} sz={11}/> Nova
+      <div style={{display:"flex",gap:7,alignItems:"center"}}>
+        <input
+          ref={ref}
+          value={draft}
+          onChange={e=>setDraft(e.target.value)}
+          onKeyDown={e=>{ if(e.key==="Enter"){ e.preventDefault(); commit(); } }}
+          placeholder="Escreva e pressione Enter ou +"
+          style={{flex:1,background:"none",border:"none",outline:"none",color:C.ink,fontSize:14}}
+        />
+        <button
+          type="button"
+          onClick={e=>{e.preventDefault(); commit();}}
+          disabled={!draft.trim()}
+          style={{
+            background:draft.trim()?C.accentBg:"none",
+            border:`1px solid ${draft.trim()?C.accentBrd:C.border}`,
+            borderRadius:5,padding:"4px 10px",
+            cursor:draft.trim()?"pointer":"default",
+            color:draft.trim()?C.accent:C.inkF,
+            display:"flex",alignItems:"center"
+          }}
+        >
+          <Ico d={D.plus} sz={15}/>
         </button>
       </div>
-      <div style={{display:"flex",flexDirection:"column",gap:3,maxHeight:140,overflowY:"auto"}}>
-        {tab==="mine"&&sessions.map(s=>renderSession(s,false))}
-        {tab==="other"&&(allOther.length===0
-          ?<p style={{fontSize:15,color:C.inkF,fontStyle:"italic",padding:"4px 0"}}>Nenhuma conversa de outros perfis.</p>
-          :allOther.map(s=>renderSession(s,true))
+    </div>
+  );
+}
+
+// ─── BookModal ────────────────────────────────────────────────────────────────
+function BookModal({mode,initial,categories,onSave,onClose,uploading,prog,err}){
+  const [d,setD]=useState({ title:"", author:"", category:categories[0]||"", tags:[], ...initial });
+  const set=(k,v)=>setD(p=>({...p,[k]:v}));
+
+  return(
+    <div style={ov} onClick={e=>{ if(e.target===e.currentTarget) onClose(); }}>
+      <div style={mb}>
+        <div style={{fontSize:22,fontWeight:600,color:C.ink,marginBottom:18}}>
+          {mode==="add" ? "Adicionar ao acervo" : "Editar livro"}
+        </div>
+
+        <div style={{marginBottom:14}}>
+          <div style={{...lb,marginBottom:6}}>Título *</div>
+          <input style={fi} value={d.title} onChange={e=>set("title",e.target.value)} placeholder="Título do livro" />
+        </div>
+
+        <div style={{marginBottom:14}}>
+          <div style={{...lb,marginBottom:6}}>Autor</div>
+          <input style={fi} value={d.author} onChange={e=>set("author",e.target.value)} placeholder="Nome do autor" />
+        </div>
+
+        <div style={{marginBottom:14}}>
+          <div style={{...lb,marginBottom:6}}>Categoria</div>
+          <select style={fi} value={d.category} onChange={e=>set("category",e.target.value)}>
+            {categories.map(c=>(
+              <option key={c} style={{background:C.surf}}>{c}</option>
+            ))}
+          </select>
+        </div>
+
+        <div style={{marginBottom:18}}>
+          <div style={{...lb,marginBottom:6}}>Tags</div>
+          <TagInput tags={d.tags} onChange={t=>set("tags",t)} />
+        </div>
+
+        {uploading && (
+          <div style={{marginBottom:12}}>
+            <div style={{height:4,background:C.border,borderRadius:2,overflow:"hidden"}}>
+              <div style={{height:"100%",background:C.accent,width:`${prog}%`,transition:"width .3s",borderRadius:2}}/>
+            </div>
+            <p style={{fontSize:13,color:C.inkF,marginTop:5}}>Processando PDF e gerando resumo…</p>
+          </div>
         )}
+
+        {err && <p style={{fontSize:13,color:C.red,marginBottom:12}}>{err}</p>}
+
+        <div style={{display:"flex",gap:10,justifyContent:"flex-end"}}>
+          <button style={bG} onClick={onClose}>Cancelar</button>
+          <button
+            style={bP(!d.title.trim() || uploading)}
+            disabled={!d.title.trim() || uploading}
+            onClick={()=>onSave(d)}
+          >
+            {uploading ? "Processando…" : mode==="add" ? "Adicionar" : "Salvar"}
+          </button>
+        </div>
       </div>
     </div>
   );
 }
 
-// ─── HomePage ─────────────────────────────────────────────────────────────────
-function HomePage({books,wishlist,onAddWish,onEditWish,onDeleteWish,lastBook,onContinue,stats,onOpenBook,onEditBook,onDeleteBook}){
-  const [sortCol,setSortCol]=useState("addedAt");
-  const [sortAsc,setSortAsc]=useState(false);
+// ─── Category Modal ───────────────────────────────────────────────────────────
+function CatModal({categories,onSave,onClose}){
+  const [cats,setCats]=useState([...categories]);
+  const [nv,setNv]=useState("");
+  const [ed,setEd]=useState(null);
 
-  const totalPages=useMemo(()=>books.reduce((s,b)=>s+(b.pages||0),0),[books]);
-  const withChats=useMemo(()=>books.filter(b=>b._hasChats).length,[books]);
-  const totalInteractions=useMemo(()=>Object.values(stats?.consultations||{}).reduce((s,v)=>s+v,0),[stats]);
-  const mostConsulted=useMemo(()=>{
-    const c=stats?.consultations||{};
-    const top=Object.entries(c).sort((a,b)=>b[1]-a[1])[0];
-    return top?books.find(b=>b.id===top[0]):null;
-  },[stats,books]);
-
-  const sorted=useMemo(()=>{
-    const arr=[...books];
-    arr.sort((a,b)=>{
-      let av=a[sortCol]||"", bv=b[sortCol]||"";
-      if(typeof av==="string") av=av.toLowerCase();
-      if(typeof bv==="string") bv=bv.toLowerCase();
-      if(av===bv) return 0;
-      return sortAsc?(av>bv?1:-1):(av<bv?1:-1);
-    });
-    return arr;
-  },[books,sortCol,sortAsc]);
-
-  const toggleSort=col=>{if(sortCol===col)setSortAsc(a=>!a);else{setSortCol(col);setSortAsc(true);}};
-  const SortIcon=({col})=>{
-    if(sortCol!==col)return<span style={{color:C.border,marginLeft:3}}>↕</span>;
-    return<span style={{color:C.accent,marginLeft:3}}>{sortAsc?"↑":"↓"}</span>;
+  const add=()=>{
+    const v=nv.trim();
+    if(!v || cats.includes(v)){
+      setNv("");
+      return;
+    }
+    setCats(p=>[...p,v]);
+    setNv("");
   };
 
-  const KCard=({label,value,sub,col,large})=>(
-    <div style={{background:C.surf,border:`1px solid ${C.border}`,borderRadius:10,padding:"18px 20px",flex:1,minWidth:140}}>
-      <div style={{...lb,marginBottom:8}}>{label}</div>
-      <div style={{fontSize:large?20:36,fontWeight:large?500:600,color:col||C.ink,lineHeight:1.2}}>{value!==null&&value!==undefined&&value!==""?value:"—"}</div>
-      {sub&&<div style={{fontSize:14,color:C.inkF,marginTop:5,lineHeight:1.4}}>{sub}</div>}
-    </div>
-  );
-
   return(
-    <div style={{flex:1,overflowY:"auto",padding:"36px 40px"}}>
-      <div style={{marginBottom:28}}>
-        <h1 style={{fontSize:40,fontWeight:400,color:C.ink,lineHeight:1}}>Minha Biblioteca</h1>
-        <p style={{fontSize:19,color:C.inkF,marginTop:7}}>Bem-vinda ao seu acervo pessoal.</p>
-      </div>
+    <div style={ov} onClick={e=>{ if(e.target===e.currentTarget) onClose(); }}>
+      <div style={{...mb,width:430}}>
+        <div style={{fontSize:22,fontWeight:600,color:C.ink,marginBottom:18}}>Gerenciar categorias</div>
 
-      {lastBook&&(
-        <div style={{background:`linear-gradient(135deg,${C.sb} 0%,#223858 100%)`,borderRadius:12,padding:"20px 24px",marginBottom:28,display:"flex",alignItems:"center",gap:18}}>
-          <div style={{width:5,minWidth:5,height:50,borderRadius:3,background:spineC(lastBook.id)}}/>
-          <div style={{flex:1,minWidth:0}}>
-            <div style={{fontSize:12,letterSpacing:"0.13em",textTransform:"uppercase",color:C.sbInkD,marginBottom:4}}>Continuar leitura</div>
-            <div style={{fontSize:21,fontWeight:500,color:C.sbInk,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{lastBook.title}</div>
-            {lastBook.author&&<div style={{fontSize:16,color:C.sbInkD,marginTop:2}}>{lastBook.author}</div>}
-          </div>
-          <button onClick={onContinue}
-            style={{display:"flex",alignItems:"center",gap:8,background:"rgba(255,255,255,.1)",border:"1px solid rgba(255,255,255,.18)",borderRadius:8,padding:"10px 20px",cursor:"pointer",color:C.sbInk,fontSize:17,flexShrink:0,whiteSpace:"nowrap"}}>
-            <Ico d={D.play} sz={14} col={C.sbInk}/> Retomar
-          </button>
-        </div>
-      )}
-
-      <div style={{display:"flex",gap:14,marginBottom:28,flexWrap:"wrap"}}>
-        <KCard label="Total de Livros" value={books.length} col={C.accent}/>
-        <KCard label="Total de Páginas" value={totalPages>0?totalPages.toLocaleString("pt-BR"):null}/>
-        <KCard label="Com Conversas" value={withChats||null}/>
-        <KCard label="Interações" value={totalInteractions||null}/>
-        {mostConsulted&&<KCard label="Mais Consultado" value={mostConsulted.title} sub={mostConsulted.author} col={C.gold} large/>}
-      </div>
-
-      {books.length>0&&(
-        <div style={{background:C.surf,border:`1px solid ${C.border}`,borderRadius:10,padding:"22px 24px",marginBottom:28}}>
-          <div style={{fontSize:20,fontWeight:500,color:C.ink,marginBottom:16}}>Acervo</div>
-          <div style={{overflowX:"auto"}}>
-            <table style={{width:"100%",borderCollapse:"collapse",fontSize:17}}>
-              <thead>
-                <tr style={{borderBottom:`1px solid ${C.border}`}}>
-                  {[["title","Nome"],["author","Autor"],["category","Categoria"],["addedAt","Data"]].map(([col,label])=>(
-                    <th key={col} onClick={()=>toggleSort(col)} style={{textAlign:"left",padding:"8px 12px",cursor:"pointer",color:C.inkD,fontWeight:500,fontSize:14,letterSpacing:"0.05em",userSelect:"none",whiteSpace:"nowrap"}}>
-                      {label}<SortIcon col={col}/>
-                    </th>
-                  ))}
-                  <th style={{textAlign:"left",padding:"8px 12px",color:C.inkD,fontWeight:500,fontSize:14,letterSpacing:"0.05em",whiteSpace:"nowrap"}}>Ações</th>
-                </tr>
-              </thead>
-              <tbody>
-                {sorted.map(b=>(
-                  <tr key={b.id} style={{borderBottom:`1px solid ${C.borderL}`}}>
-                    <td style={{padding:"10px 12px",color:C.ink,fontWeight:500}}>{b.title}</td>
-                    <td style={{padding:"10px 12px",color:C.inkD}}>{b.author||"—"}</td>
-                    <td style={{padding:"10px 12px"}}>{b.category&&<span style={{...tp,fontSize:13}}>{b.category}</span>}</td>
-                    <td style={{padding:"10px 12px",color:C.inkF,fontSize:15}}>{b.addedAt?new Date(b.addedAt).toLocaleDateString("pt-BR"):"—"}</td>
-                    <td style={{padding:"10px 12px"}}>
-                      <div style={{display:"flex",gap:7,alignItems:"center",flexWrap:"wrap"}}>
-                        <button onClick={()=>onOpenBook(b)} style={{...bI,padding:"5px 10px",fontSize:14}}>Abrir</button>
-                        <button onClick={()=>onEditBook(b)} style={{...bI,padding:"5px 9px"}}><Ico d={D.edit} sz={13}/></button>
-                        <button onClick={()=>onDeleteBook(b)} style={{...bI,padding:"5px 9px",color:C.red,borderColor:C.red+"44"}}><Ico d={D.trash} sz={13}/></button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
-
-      <div style={{background:C.surf,border:`1px solid ${C.border}`,borderRadius:10,padding:"22px 24px"}}>
-        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:16}}>
-          <div style={{display:"flex",alignItems:"center",gap:9}}>
-            <Ico d={D.heart} sz={18} col={C.red}/>
-            <span style={{fontSize:21,fontWeight:500,color:C.ink}}>Wishlist</span>
-            <span style={{fontSize:16,color:C.inkF}}>| livros que quero adquirir</span>
-          </div>
-          <button onClick={onAddWish} style={{display:"flex",alignItems:"center",gap:6,background:C.accentBg,border:`1px solid ${C.accentBrd}`,borderRadius:6,padding:"7px 16px",cursor:"pointer",color:C.accent,fontSize:17}}>
-            <Ico d={D.plus} sz={14}/> Adicionar
-          </button>
-        </div>
-        {wishlist.length===0&&<p style={{fontSize:17,color:C.inkF,fontStyle:"italic"}}>Nenhum livro na wishlist ainda.</p>}
-        <div style={{display:"flex",flexDirection:"column",gap:7}}>
-          {wishlist.map(w=>(
-            <div key={w.id} style={{display:"flex",alignItems:"center",gap:14,background:C.bg,border:`1px solid ${C.border}`,borderRadius:8,padding:"11px 16px"}}>
-              <div style={{flex:1,minWidth:0}}>
-                <div style={{fontSize:18,fontWeight:500,color:C.ink,lineHeight:1.3}}>{w.title}</div>
-                {w.author&&<div style={{fontSize:15,color:C.inkF,marginTop:2}}>{w.author}</div>}
-              </div>
-              <div style={{display:"flex",gap:7,alignItems:"center",flexShrink:0}}>
-                {w.link&&(
-                  <a href={w.link} target="_blank" rel="noopener"
-                    style={{display:"flex",alignItems:"center",gap:5,fontSize:15,color:C.accent,padding:"5px 12px",border:`1px solid ${C.accentBrd}`,borderRadius:5,textDecoration:"none",background:C.accentBg}}>
-                    <Ico d={D.link} sz={12}/> Comprar
-                  </a>
-                )}
-                <button onClick={()=>onEditWish(w)} style={{...bI,padding:"5px 9px"}}><Ico d={D.edit} sz={13}/></button>
-                <button onClick={()=>onDeleteWish(w.id)} style={{...bI,color:C.red,borderColor:C.red+"44",padding:"5px 9px"}}><Ico d={D.trash} sz={13}/></button>
-              </div>
+        <div style={{display:"flex",flexDirection:"column",gap:6,marginBottom:16}}>
+          {cats.map((c,i)=>(
+            <div key={i} style={{display:"flex",alignItems:"center",gap:8,background:C.card,border:`1px solid ${C.border}`,borderRadius:7,padding:"8px 10px"}}>
+              {ed?.i===i ? (
+                <>
+                  <input
+                    autoFocus
+                    value={ed.v}
+                    onChange={e=>setEd(p=>({...p,v:e.target.value}))}
+                    onKeyDown={e=>{
+                      if(e.key==="Enter"){
+                        const val=ed.v.trim();
+                        if(val) setCats(p=>p.map((x,j)=>j===i?val:x));
+                        setEd(null);
+                      }
+                      if(e.key==="Escape") setEd(null);
+                    }}
+                    style={{...fi,padding:"4px 8px",fontSize:14,flex:1}}
+                  />
+                  <button
+                    style={{...bI,borderColor:C.accentBrd,color:C.accent}}
+                    onClick={()=>{
+                      const val=ed.v.trim();
+                      if(val) setCats(p=>p.map((x,j)=>j===i?val:x));
+                      setEd(null);
+                    }}
+                  >
+                    <Ico d={D.check} sz={14}/>
+                  </button>
+                  <button style={bI} onClick={()=>setEd(null)}>
+                    <Ico d={D.close} sz={13}/>
+                  </button>
+                </>
+              ) : (
+                <>
+                  <span style={{flex:1,fontSize:15,color:C.ink}}>{c}</span>
+                  <button style={bI} onClick={()=>setEd({i,v:c})}><Ico d={D.edit} sz={13}/></button>
+                  <button style={{...bI,color:C.red,borderColor:C.red+"44"}} onClick={()=>setCats(p=>p.filter((_,j)=>j!==i))}><Ico d={D.trash} sz={13}/></button>
+                </>
+              )}
             </div>
           ))}
+        </div>
+
+        <div style={{display:"flex",gap:8,marginBottom:22}}>
+          <input
+            value={nv}
+            onChange={e=>setNv(e.target.value)}
+            onKeyDown={e=>{ if(e.key==="Enter") add(); }}
+            placeholder="Nova categoria…"
+            style={{...fi,flex:1}}
+          />
+          <button style={bP(!nv.trim())} disabled={!nv.trim()} onClick={add}>
+            <Ico d={D.plus} sz={16}/>
+          </button>
+        </div>
+
+        <div style={{display:"flex",gap:10,justifyContent:"flex-end"}}>
+          <button style={bG} onClick={onClose}>Cancelar</button>
+          <button style={bP(false)} onClick={()=>onSave(cats)}>Salvar</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Wishlist Modal ───────────────────────────────────────────────────────────
+function WishModal({item,onSave,onClose}){
+  const [d,setD]=useState({ title:"", author:"", link:"", ...(item||{}) });
+  const set=(k,v)=>setD(p=>({...p,[k]:v}));
+
+  return(
+    <div style={ov} onClick={e=>{ if(e.target===e.currentTarget) onClose(); }}>
+      <div style={{...mb,width:460}}>
+        <div style={{fontSize:22,fontWeight:600,color:C.ink,marginBottom:18}}>
+          {item ? "Editar item da wishlist" : "Adicionar à wishlist"}
+        </div>
+
+        <div style={{marginBottom:14}}>
+          <div style={{...lb,marginBottom:6}}>Título *</div>
+          <input style={fi} value={d.title} onChange={e=>set("title",e.target.value)} placeholder="Título do livro" />
+        </div>
+
+        <div style={{marginBottom:14}}>
+          <div style={{...lb,marginBottom:6}}>Autor</div>
+          <input style={fi} value={d.author} onChange={e=>set("author",e.target.value)} placeholder="Nome do autor" />
+        </div>
+
+        <div style={{marginBottom:22}}>
+          <div style={{...lb,marginBottom:6}}>Link de compra</div>
+          <input style={fi} value={d.link} onChange={e=>set("link",e.target.value)} placeholder="https://…" />
+        </div>
+
+        <div style={{display:"flex",gap:10,justifyContent:"flex-end"}}>
+          <button style={bG} onClick={onClose}>Cancelar</button>
+          <button style={bP(!d.title.trim())} disabled={!d.title.trim()} onClick={()=>onSave(d)}>Salvar</button>
         </div>
       </div>
     </div>
@@ -816,82 +1254,107 @@ function HomePage({books,wishlist,onAddWish,onEditWish,onDeleteWish,lastBook,onC
 }
 // ─── Setup ────────────────────────────────────────────────────────────────────
 function Setup({onReady}){
-  const [apiKey,setKey]=useState(()=>localStorage.getItem("bib_apikey")||"");
+  const [apiKey,setKey]=useState(()=>localStorage.getItem("mynd_apikey") || "");
   const [dir,setDir]=useState(null);
   const [dirName,setDirName]=useState("");
-  const [profile,setProfile]=useState(()=>localStorage.getItem("bib_user")||DEF_PROFILES[0]);
-  const [customProfile,setCustomProfile]=useState("");
+  const [profile,setProfile]=useState(()=>localStorage.getItem("mynd_user") || "");
   const [err,setErr]=useState("");
 
   const pick=async()=>{
     try{
       const dh=await window.showDirectoryPicker({mode:"readwrite",startIn:"documents"});
-      setDir(dh);setDirName(dh.name);setErr("");
+      setDir(dh);
+      setDirName(dh.name);
+      setErr("");
     }catch(e){
-      if(e.name!=="AbortError")setErr("Não foi possível acessar a pasta.");
+      if(e.name!=="AbortError") setErr("Não foi possível acessar a pasta.");
     }
   };
 
   const finish=async()=>{
-    const name=(profile==="custom"?customProfile:profile).trim();
-    if(!apiKey.trim()||!dir||!name)return;
+    const name=profile.trim();
+    if(!apiKey.trim() || !dir || !name) return;
 
     const idx=await loadIdx(dir);
-    const profiles=Array.from(new Set([...(idx.profiles||DEF_PROFILES), name]));
-    await saveIdx(dir,{books:idx.books||[],categories:idx.categories||[...DEF_CATS],wishlist:idx.wishlist||[],profiles});
+    const profiles=Array.from(new Set([...(idx.profiles||[]), name]));
+    await saveIdx(dir,{
+      books:idx.books||[],
+      categories:idx.categories||[...DEF_CATS],
+      wishlist:idx.wishlist||[],
+      profiles
+    });
 
     await idbSet("dir",dir);
     await wf(dir,"apikey.txt",apiKey.trim());
-    localStorage.setItem("bib_user",name);
-    localStorage.setItem("bib_apikey",apiKey.trim());
+    localStorage.setItem("mynd_user",name);
+    localStorage.setItem("mynd_apikey",apiKey.trim());
     onReady(dir,apiKey.trim(),name);
   };
 
-  const finalName=(profile==="custom"?customProfile:profile).trim();
-  const ready=!!apiKey.trim()&&!!dir&&!!finalName;
+  const ready=!!apiKey.trim() && !!dir && !!profile.trim();
 
   return(
     <div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",background:C.bg,padding:24}}>
       <div style={{width:560,maxWidth:"92vw"}}>
-        <h1 style={{fontSize:44,fontWeight:400,color:C.ink,marginBottom:6}}>Biblioteca Virtual</h1>
-        <p style={{fontSize:18,color:C.inkD,lineHeight:1.65,marginBottom:28}}>Configure uma vez | os dados ficam salvos na pasta escolhida, permanentemente.</p>
+        <h1 style={{fontSize:40,fontWeight:700,color:C.ink,marginBottom:6}}>Mynd Library</h1>
+        <p style={{fontSize:16,color:C.inkD,lineHeight:1.65,marginBottom:28}}>
+          Configure uma vez e siga usando seu acervo na pasta escolhida.
+        </p>
+
         <div style={{background:C.surf,border:`1px solid ${C.border}`,borderRadius:12,padding:28,display:"flex",flexDirection:"column",gap:22}}>
           <div>
-            <div style={{...lb,marginBottom:8}}>Quem está usando?</div>
-            <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:profile==="custom"?10:0}}>
-              {[...DEF_PROFILES,"custom"].map(p=>(
-                <button key={p} onClick={()=>setProfile(p)}
-                  style={{padding:"8px 18px",borderRadius:7,border:`1px solid ${profile===p?C.accentBrd:C.border}`,background:profile===p?C.accentBg:"none",cursor:"pointer",color:profile===p?C.accent:C.inkD,fontSize:17}}>
-                  {p==="custom"?"Outro…":p}
-                </button>
-              ))}
-            </div>
-            {profile==="custom"&&<input style={fi} placeholder="Seu nome…" value={customProfile} onChange={e=>setCustomProfile(e.target.value)}/>}
+            <div style={{...lb,marginBottom:8}}>Nome do perfil</div>
+            <input
+              style={fi}
+              placeholder="Digite o nome do perfil"
+              value={profile}
+              onChange={e=>setProfile(e.target.value)}
+            />
           </div>
 
           <div>
             <div style={{...lb,marginBottom:8}}>Chave de API Anthropic</div>
-            <p style={{fontSize:16,color:C.inkF,lineHeight:1.6,marginBottom:10}}>Crie grátis em <a href="https://console.anthropic.com" target="_blank" style={{color:C.accent}}>console.anthropic.com</a>. Para uso compartilhado, a mesma chave serve para as duas pessoas.</p>
-            <input type="password" style={fi} placeholder="sk-ant-…" value={apiKey} onChange={e=>setKey(e.target.value)}/>
+            <p style={{fontSize:14,color:C.inkF,lineHeight:1.6,marginBottom:10}}>
+              Crie sua chave em <a href="https://console.anthropic.com" target="_blank" style={{color:C.accent}}>console.anthropic.com</a>.
+            </p>
+            <input
+              type="password"
+              style={fi}
+              placeholder="sk-ant-..."
+              value={apiKey}
+              onChange={e=>setKey(e.target.value)}
+            />
           </div>
 
           <div>
-            <div style={{...lb,marginBottom:8}}>Pasta compartilhada</div>
-            <p style={{fontSize:16,color:C.inkF,lineHeight:1.6,marginBottom:10}}>Escolha uma pasta sincronizada (Dropbox, OneDrive, Google Drive) para acessar os mesmos livros de qualquer dispositivo.</p>
-            <button onClick={pick} style={{display:"flex",alignItems:"center",gap:9,padding:"10px 18px",border:`1px solid ${dir?C.accentBrd:C.border}`,borderRadius:7,cursor:"pointer",background:"none",color:dir?C.accent:C.inkD,fontSize:18}}>
+            <div style={{...lb,marginBottom:8}}>Pasta da biblioteca</div>
+            <p style={{fontSize:14,color:C.inkF,lineHeight:1.6,marginBottom:10}}>
+              Escolha a pasta onde seus livros, notas e conversas serão salvos.
+            </p>
+            <button
+              onClick={pick}
+              style={{
+                display:"flex",alignItems:"center",gap:9,padding:"10px 18px",
+                border:`1px solid ${dir?C.accentBrd:C.border}`,
+                borderRadius:7,cursor:"pointer",background:"none",
+                color:dir?C.accent:C.inkD,fontSize:14,fontWeight:600
+              }}
+            >
               <Ico d={D.folder} sz={16}/>{dir?`✓ ${dirName}`:"Escolher pasta…"}
             </button>
-            {err&&<p style={{fontSize:14,color:C.red,marginTop:8}}>{err}</p>}
+            {err && <p style={{fontSize:13,color:C.red,marginTop:8}}>{err}</p>}
           </div>
 
-          <button disabled={!ready} onClick={finish} style={{...bP(!ready),fontSize:19,padding:"13px",marginTop:4}}>Abrir minha biblioteca →</button>
+          <button disabled={!ready} onClick={finish} style={{...bP(!ready),fontSize:15,padding:"12px",marginTop:4}}>
+            Abrir Mynd Library →
+          </button>
         </div>
       </div>
     </div>
   );
 }
 
-// ─── ProfileSwitcher ──────────────────────────────────────────────────────────
+// ─── Profile Switcher ─────────────────────────────────────────────────────────
 function ProfileSwitcher({userName,onSwitch,profiles=[]}){
   const [open,setOpen]=useState(false);
   const [custom,setCustom]=useState("");
@@ -899,25 +1362,43 @@ function ProfileSwitcher({userName,onSwitch,profiles=[]}){
 
   return(
     <div style={{position:"relative"}}>
-      <button onClick={()=>setOpen(o=>!o)}
-        style={{display:"flex",alignItems:"center",gap:6,background:"rgba(255,255,255,.07)",border:"1px solid rgba(255,255,255,.18)",borderRadius:6,padding:"5px 10px",cursor:"pointer",color:C.sbInk,fontSize:15}}>
+      <button
+        onClick={()=>setOpen(o=>!o)}
+        style={{display:"flex",alignItems:"center",gap:6,background:"rgba(255,255,255,.07)",border:"1px solid rgba(255,255,255,.18)",borderRadius:6,padding:"5px 10px",cursor:"pointer",color:C.sbInk,fontSize:12,fontWeight:600}}
+      >
         <Ico d={D.user} sz={12} col={C.sbInk}/>
         <span>{userName}</span>
         <Ico d={D.chevDown} sz={11} col={C.sbInk}/>
       </button>
-      {open&&(
+
+      {open && (
         <div style={{position:"absolute",top:"calc(100% + 6px)",right:0,background:"#1e3554",border:"1px solid #2d4a6e",borderRadius:9,padding:"8px 0",minWidth:190,zIndex:100,boxShadow:"0 10px 30px rgba(0,0,0,.45)"}}>
           {options.map(p=>(
-            <button key={p} onClick={()=>{onSwitch(p);setOpen(false);}}
-              style={{width:"100%",textAlign:"left",padding:"9px 16px",background:p===userName?"rgba(255,255,255,.12)":"none",border:"none",cursor:"pointer",color:C.sbInk,fontSize:16}}>
+            <button
+              key={p}
+              onClick={()=>{onSwitch(p); setOpen(false);}}
+              style={{width:"100%",textAlign:"left",padding:"9px 16px",background:p===userName?"rgba(255,255,255,.12)":"none",border:"none",cursor:"pointer",color:C.sbInk,fontSize:13,fontWeight:500}}
+            >
               {p}
             </button>
           ))}
+
           <div style={{borderTop:"1px solid #2d4a6e",margin:"6px 0"}}/>
+
           <div style={{padding:"6px 12px"}}>
-            <input value={custom} onChange={e=>setCustom(e.target.value)} placeholder="Outro nome…"
-              style={{width:"100%",background:"rgba(0,0,0,.25)",border:"1px solid #2d4a6e",borderRadius:5,padding:"6px 10px",color:C.sbInk,fontSize:15,outline:"none"}}
-              onKeyDown={e=>{if(e.key==="Enter"&&custom.trim()){onSwitch(custom.trim());setCustom("");setOpen(false);}}}/>
+            <input
+              value={custom}
+              onChange={e=>setCustom(e.target.value)}
+              placeholder="Novo perfil…"
+              style={{width:"100%",background:"rgba(0,0,0,.25)",border:"1px solid #2d4a6e",borderRadius:5,padding:"6px 10px",color:C.sbInk,fontSize:13,outline:"none"}}
+              onKeyDown={e=>{
+                if(e.key==="Enter" && custom.trim()){
+                  onSwitch(custom.trim());
+                  setCustom("");
+                  setOpen(false);
+                }
+              }}
+            />
           </div>
         </div>
       )}
@@ -929,7 +1410,7 @@ function ProfileSwitcher({userName,onSwitch,profiles=[]}){
 function Library({dirHandle,apiKey,userName:initUser}){
   const [books,setBooks]                = useState([]);
   const [cats,setCats]                  = useState([...DEF_CATS]);
-  const [profiles,setProfiles]          = useState([...DEF_PROFILES]);
+  const [profiles,setProfiles]          = useState([]);
   const [wishlist,setWishlist]          = useState([]);
   const [stats,setStats]                = useState({consultations:{}});
   const [screen,setScreen]              = useState("home");
@@ -943,12 +1424,10 @@ function Library({dirHandle,apiKey,userName:initUser}){
   const [globalTexts,setGlobalTexts]    = useState(null);
   const [chatLoading,setChatLoading]    = useState(false);
   const [globalLoading,setGlobalLoading]= useState(false);
-  const [conceptLoading,setConceptLoading]= useState(false);
 
   const [searchQ,setSearchQ]            = useState("");
   const [tagQuery,setTagQuery]          = useState("");
-  const [conceptQuery,setConceptQuery]  = useState("");
-  const [activeFilter,setActiveFilter]  = useState("search");
+  const [selectedCategory,setSelectedCategory] = useState("");
   const [modal,setModal]                = useState(null);
   const [editBook,setEditBook]          = useState(null);
   const [wishModal,setWishModal]        = useState(false);
@@ -964,23 +1443,41 @@ function Library({dirHandle,apiKey,userName:initUser}){
   const otherProfiles=useMemo(()=>profiles.filter(p=>p!==userName),[profiles,userName]);
 
   useEffect(()=>{
-    Promise.all([loadIdx(dirHandle),loadStats(dirHandle)]).then(([idx,st])=>{
-      setBooks(idx.books||[]);
-      setCats(idx.categories||[...DEF_CATS]);
-      setWishlist(idx.wishlist||[]);
-      setProfiles(idx.profiles||[...DEF_PROFILES]);
+    (async()=>{
+      const [idx,st,files] = await Promise.all([
+        loadIdx(dirHandle),
+        loadStats(dirHandle),
+        listDirFiles(dirHandle)
+      ]);
+
+      const booksWithMeta=(idx.books || []).map(book=>{
+        const hasNotes = files.some(name=>name.startsWith(`${book.id}_notes_`));
+        const hasChats = files.some(name=>name.startsWith(`${book.id}_chats_`));
+        return { ...book, _hasNotes:hasNotes, _hasChats:hasChats };
+      });
+
+      setBooks(booksWithMeta);
+      setCats(idx.categories || [...DEF_CATS]);
+      setWishlist(idx.wishlist || []);
+      setProfiles(idx.profiles || []);
       setStats(st);
 
-      const lastId=localStorage.getItem("bib_lastBook");
+      const lastId=localStorage.getItem("mynd_lastBook");
       if(lastId){
-        const found=(idx.books||[]).find(x=>x.id===lastId);
-        if(found)setLastBook(found);
+        const found=booksWithMeta.find(x=>x.id===lastId);
+        if(found) setLastBook(found);
       }
-    });
+    })();
   },[dirHandle]);
 
   const persist=async(nextBooks=books,nextCats=cats,nextWishlist=wishlist,nextProfiles=profiles)=>{
-    await saveIdx(dirHandle,{books:nextBooks,categories:nextCats,wishlist:nextWishlist,profiles:nextProfiles});
+    const booksToStore=nextBooks.map(({_hasNotes,_hasChats,...rest})=>rest);
+    await saveIdx(dirHandle,{
+      books:booksToStore,
+      categories:nextCats,
+      wishlist:nextWishlist,
+      profiles:nextProfiles
+    });
   };
 
   const ensureProfileSaved=async(name)=>{
@@ -994,7 +1491,13 @@ function Library({dirHandle,apiKey,userName:initUser}){
 
   const bumpStat=async(bookId)=>{
     setStats(prev=>{
-      const next={...prev,consultations:{...prev.consultations,[bookId]:(prev.consultations[bookId]||0)+1}};
+      const next={
+        ...prev,
+        consultations:{
+          ...prev.consultations,
+          [bookId]:(prev.consultations[bookId]||0)+1
+        }
+      };
       saveStats(dirHandle,next);
       return next;
     });
@@ -1003,88 +1506,127 @@ function Library({dirHandle,apiKey,userName:initUser}){
   const allTags=useMemo(()=>{
     const s=new Set();
     books.forEach(b=>(b.tags||[]).forEach(t=>s.add(t)));
-    return [...s].sort();
+    return [...s].sort((a,b)=>a.localeCompare(b,"pt-BR"));
   },[books]);
 
   const filtered=useMemo(()=>{
     return books.filter(b=>{
-      if(activeFilter==="search" && searchQ.trim()){
-        const q=searchQ.toLowerCase();
-        return b.title.toLowerCase().includes(q)||(b.author||"").toLowerCase().includes(q);
-      }
-      if(activeFilter==="tag" && tagQuery.trim()){
-        const q=tagQuery.toLowerCase();
-        return (b.tags||[]).some(t=>t.toLowerCase().includes(q));
-      }
-      if(activeFilter==="concept" && conceptQuery.trim()){
-        const q=conceptQuery.toLowerCase();
-        return b.title.toLowerCase().includes(q)||(b.author||"").toLowerCase().includes(q)||(b.summary||"").toLowerCase().includes(q)||(b.category||"").toLowerCase().includes(q)||(b.tags||[]).some(t=>t.toLowerCase().includes(q));
-      }
-      return true;
+      const matchesSearch = !searchQ.trim() || (
+        b.title.toLowerCase().includes(searchQ.toLowerCase()) ||
+        (b.author||"").toLowerCase().includes(searchQ.toLowerCase())
+      );
+
+      const matchesTag = !tagQuery.trim() || (
+        (b.tags||[]).some(t=>t.toLowerCase().includes(tagQuery.toLowerCase()))
+      );
+
+      const matchesCategory = !selectedCategory || b.category === selectedCategory;
+
+      return matchesSearch && matchesTag && matchesCategory;
     });
-  },[books,activeFilter,searchQ,tagQuery,conceptQuery]);
+  },[books,searchQ,tagQuery,selectedCategory]);
 
   const catCounts=useMemo(()=>{
     const m={};
-    books.forEach(b=>{m[b.category]=(m[b.category]||0)+1;});
+    books.forEach(b=>{ m[b.category]=(m[b.category]||0)+1; });
     return m;
   },[books]);
 
-  const hasActiveFilter=(activeFilter==="search"&&searchQ.trim())||(activeFilter==="tag"&&tagQuery.trim())||(activeFilter==="concept"&&conceptQuery.trim());
+  const hasActiveFilter = !!searchQ.trim() || !!tagQuery.trim() || !!selectedCategory;
 
   const clearFilters=()=>{
     setSearchQ("");
     setTagQuery("");
-    setConceptQuery("");
-    setActiveFilter("search");
+    setSelectedCategory("");
   };
 
   const handleFilePick=e=>{
     const f=e.target.files?.[0];
     e.target.value="";
-    if(!f)return;
-    if(!f.name.toLowerCase().endsWith(".pdf")){alert("Apenas PDFs.");return;}
+    if(!f) return;
+    if(!f.name.toLowerCase().endsWith(".pdf")){
+      alert("Apenas PDFs.");
+      return;
+    }
     setPendingFile(f);
-    setModal({type:"add",initial:{title:f.name.replace(/\.pdf$/i,"").replace(/[-_]/g," "),author:"",category:cats[0]||"",tags:[]}});
+    setModal({
+      type:"add",
+      initial:{
+        title:f.name.replace(/\.pdf$/i,"").replace(/[-_]/g," "),
+        author:"",
+        category:cats[0] || "",
+        tags:[]
+      }
+    });
     setUpErr("");
     setUpProg(0);
   };
 
   const doAdd=async(fd)=>{
-    setUploading(true); setUpProg(15); setUpErr("");
+    setUploading(true);
+    setUpProg(15);
+    setUpErr("");
+
     try{
-      const {text,pages}=await extractPdf(pendingFile); setUpProg(55);
+      const {text,pages}=await extractPdf(pendingFile);
+      setUpProg(55);
+
       let summary="";
-      try{summary=await callClaude(apiKey,sysSummary(fd.title),[{role:"user",content:text.slice(0,20000)}],300);}catch{}
+      try{
+        summary=await callClaude(apiKey,sysSummary(fd.title),[{role:"user",content:text.slice(0,20000)}],300);
+      }catch{}
+
       setUpProg(85);
 
       const id=uid();
-      const book={id,title:fd.title.trim(),author:fd.author.trim(),category:fd.category,tags:fd.tags,pages,summary,addedAt:new Date().toISOString()};
+      const book={
+        id,
+        title:fd.title.trim(),
+        author:fd.author.trim(),
+        category:fd.category,
+        tags:fd.tags,
+        pages,
+        summary,
+        addedAt:new Date().toISOString(),
+        _hasNotes:false,
+        _hasChats:false
+      };
+
       await wf(dirHandle,`${id}.txt`,text);
+
       const nb=[...books,book];
       setBooks(nb);
       await persist(nb,cats,wishlist,profiles);
+
       setUpProg(100);
-      setTimeout(()=>{setModal(null);setPendingFile(null);setUploading(false);setUpProg(0);},500);
+      setTimeout(()=>{
+        setModal(null);
+        setPendingFile(null);
+        setUploading(false);
+        setUpProg(0);
+      },500);
     }catch(e){
-      setUpErr("Erro: "+e.message); setUploading(false); setUpProg(0);
+      setUpErr("Erro: " + e.message);
+      setUploading(false);
+      setUpProg(0);
     }
   };
 
-  const doEdit=async fd=>{
-    const nb=books.map(b=>b.id===editBook.id?{...b,...fd}:b);
+  const doEdit=async(fd)=>{
+    const nb=books.map(b=>b.id===editBook.id ? {...b,...fd} : b);
     setBooks(nb);
-    if(selBook?.id===editBook.id)setSelBook(p=>({...p,...fd}));
+    if(selBook?.id===editBook.id) setSelBook(p=>({...p,...fd}));
     await persist(nb,cats,wishlist,profiles);
-    setModal(null); setEditBook(null);
+    setModal(null);
+    setEditBook(null);
   };
 
-  const doDelete=async book=>{
-    if(!confirm(`Remover "${book.title}"?`))return;
+  const doDelete=async(book)=>{
+    if(!confirm(`Remover "${book.title}"?`)) return;
 
     await rmf(dirHandle,`${book.id}.txt`);
 
-    const knownProfiles=Array.from(new Set([...(profiles||[]), ...DEF_PROFILES, userName].filter(Boolean)));
+    const knownProfiles=Array.from(new Set([...(profiles||[]), userName].filter(Boolean)));
     for(const p of knownProfiles){
       await rmf(dirHandle,noteFileName(book.id,p));
       await rmf(dirHandle,chatFileName(book.id,p));
@@ -1100,14 +1642,23 @@ function Library({dirHandle,apiKey,userName:initUser}){
     const nb=books.filter(b=>b.id!==book.id);
     setBooks(nb);
     await persist(nb,cats,wishlist,profiles);
-    if(selBook?.id===book.id){setSelBook(null);setScreen("home");}
+
+    if(selBook?.id===book.id){
+      setSelBook(null);
+      setScreen("home");
+    }
   };
 
-  const saveCats=async nc=>{setCats(nc);await persist(books,nc,wishlist,profiles);setModal(null);};
-  const saveWish=async d=>{
+  const saveCats=async(nc)=>{
+    setCats(nc);
+    await persist(books,nc,wishlist,profiles);
+    setModal(null);
+  };
+
+  const saveWish=async(d)=>{
     let nw;
     if(wishEdit){
-      nw=wishlist.map(w=>w.id===wishEdit.id?{...wishEdit,...d}:w);
+      nw=wishlist.map(w=>w.id===wishEdit.id ? {...wishEdit,...d} : w);
     }else{
       nw=[...wishlist,{...d,id:uid(),addedAt:new Date().toISOString()}];
     }
@@ -1116,19 +1667,22 @@ function Library({dirHandle,apiKey,userName:initUser}){
     setWishModal(false);
     setWishEdit(null);
   };
-  const deleteWish=async id=>{
+
+  const deleteWish=async(id)=>{
     const nw=wishlist.filter(w=>w.id!==id);
     setWishlist(nw);
     await persist(books,cats,nw,profiles);
   };
 
   const openBook=async(book)=>{
-    setSelBook(book); setScreen("book");
-    setLastBook(book); localStorage.setItem("bib_lastBook",book.id);
+    setSelBook(book);
+    setScreen("book");
+    setLastBook(book);
+    localStorage.setItem("mynd_lastBook",book.id);
     await bumpStat(book.id);
 
     const txt=await rf(dirHandle,`${book.id}.txt`);
-    setBookText(txt||"");
+    setBookText(txt || "");
 
     const sessions=await loadChats(dirHandle,book.id,userName);
     setChatSessions(sessions);
@@ -1140,65 +1694,77 @@ function Library({dirHandle,apiKey,userName:initUser}){
     }
     setOtherSessions(others);
 
-    const lastId=localStorage.getItem(`bib_lastChat_${book.id}`);
+    const lastId=localStorage.getItem(`mynd_lastChat_${book.id}`);
     const last=sessions.find(s=>s.id===lastId);
-    if(last){setBookMsgs(last.messages);setActiveChatId(last.id);}
-    else{setBookMsgs([]);setActiveChatId(null);}
+    if(last){
+      setBookMsgs(last.messages);
+      setActiveChatId(last.id);
+    }else{
+      setBookMsgs([]);
+      setActiveChatId(null);
+    }
   };
-    const newChat=()=>{setBookMsgs([]);setActiveChatId(null);};
+
+  const newChat=()=>{
+    setBookMsgs([]);
+    setActiveChatId(null);
+  };
 
   const selectChat=s=>{
     setBookMsgs(s.messages);
     if(!s._profile){
       setActiveChatId(s.id);
-      localStorage.setItem(`bib_lastChat_${selBook.id}`,s.id);
+      localStorage.setItem(`mynd_lastChat_${selBook.id}`,s.id);
     }else{
       setActiveChatId(null);
     }
   };
 
-  const saveCurrentChat=async msgs=>{
-    if(!selBook||!msgs.length)return;
+  const saveCurrentChat=async(msgs)=>{
+    if(!selBook || !msgs.length) return;
+
     const firstUser=msgs.find(m=>m.role==="user");
-    const title=firstUser?firstUser.content.slice(0,50):"Conversa";
+    const title=firstUser ? firstUser.content.slice(0,50) : "Conversa";
     const date=new Date().toLocaleDateString("pt-BR");
     let sessions=[...chatSessions];
 
     if(activeChatId){
-      sessions=sessions.map(s=>s.id===activeChatId?{...s,messages:msgs,title,date}:s);
+      sessions=sessions.map(s=>s.id===activeChatId ? {...s,messages:msgs,title,date} : s);
     }else{
       const id=uid();
-      sessions=[{id,title,date,messages:msgs,profileId:userName,bookId:selBook.id},...sessions];
+      sessions=[{id,title,date,messages:msgs,profileId:userName,bookId:selBook.id}, ...sessions];
       setActiveChatId(id);
-      localStorage.setItem(`bib_lastChat_${selBook.id}`,id);
+      localStorage.setItem(`mynd_lastChat_${selBook.id}`,id);
     }
 
     setChatSessions(sessions);
     await saveChats(dirHandle,selBook.id,userName,sessions);
 
     if(!selBook._hasChats){
-      const nb=books.map(b=>b.id===selBook.id?{...b,_hasChats:true}:b);
+      const nb=books.map(b=>b.id===selBook.id ? {...b,_hasChats:true} : b);
       setBooks(nb);
+      setSelBook(p=>p?{...p,_hasChats:true}:p);
       await persist(nb,cats,wishlist,profiles);
     }
   };
 
   const openGlobal=async()=>{
     setScreen("global");
-    if(globalTexts)return;
+    if(globalTexts) return;
+
     setGlobalLoading(true);
     const t={};
     for(const b of books){
-      t[b.id]=await rf(dirHandle,`${b.id}.txt`)||"";
+      t[b.id]=await rf(dirHandle,`${b.id}.txt`) || "";
     }
     setGlobalTexts(t);
     setGlobalLoading(false);
   };
 
-  const av=userName?userName.charAt(0).toUpperCase():"?";
+  const av=userName ? userName.charAt(0).toUpperCase() : "?";
   const mkM=(role,content)=>({role,content,av});
 
-  const sendBook=async txt=>{
+  const sendBook=async(txt)=>{
     const next=[...bookMsgs,mkM("user",txt)];
     setBookMsgs(next);
     setChatLoading(true);
@@ -1208,13 +1774,13 @@ function Library({dirHandle,apiKey,userName:initUser}){
       setBookMsgs(final);
       await saveCurrentChat(final);
     }catch(e){
-      setBookMsgs(p=>[...p,mkM("assistant","Erro: "+e.message)]);
+      setBookMsgs(p=>[...p,mkM("assistant","Erro: " + e.message)]);
     }
     setChatLoading(false);
   };
 
-  const sendGlobal=async txt=>{
-    if(!globalTexts)return;
+  const sendGlobal=async(txt)=>{
+    if(!globalTexts) return;
     const next=[...globalMsgs,mkM("user",txt)];
     setGlobalMsgs(next);
     setChatLoading(true);
@@ -1222,33 +1788,13 @@ function Library({dirHandle,apiKey,userName:initUser}){
       const r=await callClaude(apiKey,sysGlobal(books,globalTexts),next);
       setGlobalMsgs(p=>[...p,mkM("assistant",r)]);
     }catch(e){
-      setGlobalMsgs(p=>[...p,mkM("assistant","Erro: "+e.message)]);
+      setGlobalMsgs(p=>[...p,mkM("assistant","Erro: " + e.message)]);
     }
     setChatLoading(false);
   };
 
-  const runConceptSearch=async concept=>{
-    const q=concept.trim();
-    if(!q)return;
-    setActiveFilter("concept");
-    setConceptQuery(q);
-    await openGlobal();
-    setConceptLoading(true);
-    try{
-      const ctx=globalTexts || Object.fromEntries(await Promise.all(books.map(async b=>[b.id, await rf(dirHandle,`${b.id}.txt`)||""])));
-      if(!globalTexts) setGlobalTexts(ctx);
-      const next=[mkM("user",`Busca por conceito: ${q}`)];
-      setGlobalMsgs(next);
-      const r=await callClaude(apiKey,sysConcept(books,ctx,q),next,1400);
-      setGlobalMsgs([...next,mkM("assistant",r)]);
-    }catch(e){
-      setGlobalMsgs([mkM("user",`Busca por conceito: ${q}`),mkM("assistant","Erro: "+e.message)]);
-    }
-    setConceptLoading(false);
-  };
-
   const exportChat=(msgs,title)=>{
-    const txt=msgs.map(m=>`[${m.role==="user"?userName||"Você":"Biblioteca"}]\n${m.content}`).join("\n\n──────────────────\n\n");
+    const txt=msgs.map(m=>`[${m.role==="user" ? (userName || "Você") : "Mynd Library"}]\n${m.content}`).join("\n\n──────────────────\n\n");
     const blob=new Blob([`Conversa: ${title}\n${"═".repeat(36)}\n\n${txt}`],{type:"text/plain"});
     const a=document.createElement("a");
     a.href=URL.createObjectURL(blob);
@@ -1256,24 +1802,30 @@ function Library({dirHandle,apiKey,userName:initUser}){
     a.click();
   };
 
-  const switchProfile=async name=>{
+  const switchProfile=async(name)=>{
     const trimmed=(name||"").trim();
     if(!trimmed) return;
     setUserName(trimmed);
-    localStorage.setItem("bib_user",trimmed);
+    localStorage.setItem("mynd_user",trimmed);
     await ensureProfileSaved(trimmed);
     if(selBook) openBook(selBook);
   };
 
-  const suggClick=(fn,txt)=>()=>fn(txt);
+  const updateBookNotesPresence=async(bookId,hasNotes)=>{
+    const nb=books.map(b=>b.id===bookId ? {...b,_hasNotes:hasNotes} : b);
+    setBooks(nb);
+    if(selBook?.id===bookId) setSelBook(p=>p?{...p,_hasNotes:hasNotes}:p);
+    await persist(nb,cats,wishlist,profiles);
+  };
 
-  // ── Sidebar ────────────────────────────────────────────────────────────────
+  const suggClick=(fn,txt)=>()=>fn(txt);
+    // ── Sidebar ────────────────────────────────────────────────────────────────
   const Sidebar=()=>(
-    <aside style={{width:305,minWidth:305,background:C.sb,borderRight:`1px solid ${C.sbBorder}`,display:"flex",flexDirection:"column",overflow:"hidden"}}>
-      <div style={{padding:"20px 18px 14px",borderBottom:`1px solid ${C.sbBorder}`}}>
-        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:4}}>
-          <div style={{fontSize:23,fontWeight:600,color:C.sbInk,display:"flex",alignItems:"center",gap:9}}>
-            <Ico d={D.book} sz={19} col={C.sbInk}/> Biblioteca
+    <aside style={{width:285,minWidth:285,background:C.sb,borderRight:`1px solid ${C.sbBorder}`,display:"flex",flexDirection:"column",overflowY:"auto"}}>
+      <div style={{padding:"16px 14px 12px",borderBottom:`1px solid ${C.sbBorder}`}}>
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:4,gap:8}}>
+          <div style={{fontSize:19,fontWeight:700,color:C.sbInk,display:"flex",alignItems:"center",gap:8}}>
+            <Ico d={D.book} sz={17} col={C.sbInk}/> Mynd Library
           </div>
           <ProfileSwitcher userName={userName} onSwitch={switchProfile} profiles={profiles}/>
         </div>
@@ -1282,58 +1834,80 @@ function Library({dirHandle,apiKey,userName:initUser}){
 
       <div style={{padding:"10px 10px 8px",borderBottom:`1px solid ${C.sbBorder}`}}>
         {[
-          {id:"home",label:"Página Inicial",icon:D.home,fn:()=>setScreen("home")},
+          {id:"home",label:"Página inicial",icon:D.home,fn:()=>setScreen("home")},
           {id:"global",label:"Pesquisar na biblioteca",icon:D.globe,fn:openGlobal},
         ].map(({id,label,icon,fn})=>(
-          <button key={id} onClick={fn}
-            style={{width:"100%",display:"flex",alignItems:"center",gap:9,padding:"9px 12px",marginBottom:3,borderRadius:7,cursor:"pointer",border:"none",textAlign:"left",fontSize:17,fontWeight:screen===id?500:400,background:screen===id?C.sbSurf:"none",color:screen===id?C.sbInk:C.sbInkD}}>
-            <Ico d={icon} sz={16} col={C.sbInk}/>{label}
+          <button
+            key={id}
+            onClick={fn}
+            style={{
+              width:"100%",display:"flex",alignItems:"center",gap:8,padding:"8px 10px",marginBottom:3,
+              borderRadius:7,cursor:"pointer",border:"none",textAlign:"left",fontSize:13,
+              fontWeight:screen===id?700:500,background:screen===id?C.sbSurf:"none",
+              color:screen===id?C.sbInk:C.sbInkD
+            }}
+          >
+            <Ico d={icon} sz={15} col={C.sbInk}/>{label}
           </button>
         ))}
       </div>
 
-      <div style={{padding:"12px 13px 8px",borderBottom:`1px solid ${C.sbBorder}`}}>
-        <div style={{...sbLb,marginBottom:8,display:"flex",alignItems:"center",gap:6}}>
-          <Ico d={D.search} sz={11}/> Pesquisar um livro
+      <div style={{padding:"10px 11px 8px",borderBottom:`1px solid ${C.sbBorder}`}}>
+        <div style={{...sbLb,marginBottom:7,display:"flex",alignItems:"center",gap:6}}>
+          <Ico d={D.search} sz={10}/> Pesquisar um livro
         </div>
-        <div style={{display:"flex",alignItems:"center",gap:7,background:"rgba(0,0,0,.2)",border:`1px solid ${activeFilter==="search"&&searchQ.trim()?"rgba(255,255,255,.45)":C.sbBorder}`,borderRadius:6,padding:"8px 11px",marginBottom:10}}>
-          <Ico d={D.search} sz={14} col={C.sbInk}/>
-          <StableInput value={searchQ} onValueChange={v=>{setSearchQ(v);setActiveFilter("search");}} placeholder="Título ou autor…"
-            style={{flex:1,background:"none",border:"none",outline:"none",color:C.sbInk,fontSize:17,minWidth:0}}/>
-          {searchQ&&<button onClick={()=>{setSearchQ("");if(activeFilter==="search")setActiveFilter("search");}} style={{background:"none",border:"none",cursor:"pointer",color:C.sbInk,display:"flex"}}><Ico d={D.close} sz={12}/></button>}
+
+        <div style={{display:"flex",alignItems:"center",gap:7,background:"rgba(0,0,0,.2)",border:`1px solid ${searchQ.trim()?"rgba(255,255,255,.45)":C.sbBorder}`,borderRadius:6,padding:"7px 10px",marginBottom:10}}>
+          <Ico d={D.search} sz={13} col={C.sbInk}/>
+          <input
+            value={searchQ}
+            onChange={e=>setSearchQ(e.target.value)}
+            placeholder="Título ou autor…"
+            style={{flex:1,background:"none",border:"none",outline:"none",color:C.sbInk,fontSize:13,minWidth:0}}
+          />
+          {searchQ && (
+            <button onClick={()=>setSearchQ("")} style={{background:"none",border:"none",cursor:"pointer",color:C.sbInk,display:"flex"}}>
+              <Ico d={D.close} sz={12}/>
+            </button>
+          )}
         </div>
 
         <div style={{...sbLb,marginBottom:6,display:"flex",alignItems:"center",gap:4}}>
           <Ico d={D.tag} sz={10}/> Pesquisa por tag
         </div>
-        <div style={{display:"flex",alignItems:"center",gap:7,background:"rgba(0,0,0,.2)",border:`1px solid ${activeFilter==="tag"&&tagQuery.trim()?"rgba(255,255,255,.45)":C.sbBorder}`,borderRadius:6,padding:"8px 11px",marginBottom:10}}>
-          <Ico d={D.tag} sz={14} col={C.sbInk}/>
-          <StableInput value={tagQuery} onValueChange={v=>{setTagQuery(v);setActiveFilter("tag");}} placeholder="Digite uma tag…"
-            style={{flex:1,background:"none",border:"none",outline:"none",color:C.sbInk,fontSize:17,minWidth:0}}/>
-          {tagQuery&&<button onClick={()=>setTagQuery("")} style={{background:"none",border:"none",cursor:"pointer",color:C.sbInk,display:"flex"}}><Ico d={D.close} sz={12}/></button>}
-        </div>
 
-        <div style={{...sbLb,marginBottom:6,display:"flex",alignItems:"center",gap:4}}>
-          <Ico d={D.globe} sz={10}/> Busca por conceito
-        </div>
-        <div style={{display:"flex",alignItems:"center",gap:7,background:"rgba(0,0,0,.2)",border:`1px solid ${activeFilter==="concept"&&conceptQuery.trim()?"rgba(255,255,255,.45)":C.sbBorder}`,borderRadius:6,padding:"8px 11px",marginBottom:10}}>
-          <Ico d={D.globe} sz={14} col={C.sbInk}/>
-          <StableInput value={conceptQuery} onValueChange={v=>{setConceptQuery(v);setActiveFilter("concept");}} placeholder="Ex.: estratégia, atenção, memória…"
-            style={{flex:1,background:"none",border:"none",outline:"none",color:C.sbInk,fontSize:17,minWidth:0}}
-            onKeyDown={e=>{if(e.key==="Enter"){e.preventDefault();runConceptSearch(conceptQuery);}}}
+        <div style={{display:"flex",alignItems:"center",gap:7,background:"rgba(0,0,0,.2)",border:`1px solid ${tagQuery.trim()?"rgba(255,255,255,.45)":C.sbBorder}`,borderRadius:6,padding:"7px 10px",marginBottom:8}}>
+          <Ico d={D.tag} sz={13} col={C.sbInk}/>
+          <input
+            value={tagQuery}
+            onChange={e=>setTagQuery(e.target.value)}
+            placeholder="Digite uma tag…"
+            style={{flex:1,background:"none",border:"none",outline:"none",color:C.sbInk,fontSize:13,minWidth:0}}
           />
-          <button onClick={()=>runConceptSearch(conceptQuery)} style={{background:"none",border:"none",cursor:"pointer",color:C.sbInk,display:"flex"}} title="Buscar conceito">
-            <Ico d={D.search} sz={12}/>
-          </button>
+          {tagQuery && (
+            <button onClick={()=>setTagQuery("")} style={{background:"none",border:"none",cursor:"pointer",color:C.sbInk,display:"flex"}}>
+              <Ico d={D.close} sz={12}/>
+            </button>
+          )}
         </div>
 
-        {allTags.length>0&&(
+        {allTags.length > 0 && (
           <div style={{marginBottom:10}}>
-            <div style={{...sbLb,marginBottom:6,display:"flex",alignItems:"center",gap:4}}><Ico d={D.tag} sz={10}/> Tags disponíveis</div>
-            <div style={{display:"flex",flexWrap:"wrap",gap:5,maxHeight:88,overflowY:"auto"}}>
+            <div style={{...sbLb,marginBottom:6,display:"flex",alignItems:"center",gap:4}}>
+              <Ico d={D.tag} sz={10}/> Tags disponíveis
+            </div>
+            <div style={{display:"flex",flexWrap:"wrap",gap:5,maxHeight:90,overflowY:"auto"}}>
               {allTags.map(t=>(
-                <button key={t} onClick={()=>{setTagQuery(t);setActiveFilter("tag");}}
-                  style={{fontSize:13,padding:"2px 9px",borderRadius:10,cursor:"pointer",border:`1px solid ${tagQuery.toLowerCase()===t.toLowerCase()?"rgba(255,255,255,.75)":"rgba(255,255,255,.28)"}`,background:tagQuery.toLowerCase()===t.toLowerCase()?"rgba(255,255,255,.18)":"rgba(255,255,255,.08)",color:C.sbInk}}>
+                <button
+                  key={t}
+                  onClick={()=>setTagQuery(t)}
+                  style={{
+                    fontSize:11,padding:"2px 8px",borderRadius:10,cursor:"pointer",
+                    border:`1px solid ${tagQuery.toLowerCase()===t.toLowerCase()?"rgba(255,255,255,.75)":"rgba(255,255,255,.28)"}`,
+                    background:tagQuery.toLowerCase()===t.toLowerCase()?"rgba(255,255,255,.18)":"rgba(255,255,255,.08)",
+                    color:C.sbInk,fontWeight:600
+                  }}
+                >
                   {t}
                 </button>
               ))}
@@ -1344,54 +1918,95 @@ function Library({dirHandle,apiKey,userName:initUser}){
         <div>
           <div style={{...sbLb,marginBottom:6,display:"flex",alignItems:"center",justifyContent:"space-between"}}>
             <span style={{display:"flex",alignItems:"center",gap:4}}><Ico d={D.list} sz={10}/> Categorias</span>
-            <button onClick={()=>setModal({type:"cats"})} title="Gerenciar categorias" style={{background:"none",border:"none",cursor:"pointer",color:C.sbInk,display:"flex",padding:2}}><Ico d={D.edit} sz={11}/></button>
+            <button onClick={()=>setModal({type:"cats"})} title="Gerenciar categorias" style={{background:"none",border:"none",cursor:"pointer",color:C.sbInk,display:"flex",padding:2}}>
+              <Ico d={D.edit} sz={11}/>
+            </button>
           </div>
-          <div style={{display:"flex",flexDirection:"column",gap:2}}>
-            {["Todos",...cats].map(cat=>(
-              <button key={cat} onClick={()=>{
-                if(cat==="Todos"){clearFilters();return;}
-                setSearchQ("");
-                setTagQuery("");
-                setConceptQuery(cat);
-                setActiveFilter("concept");
-              }}
-                style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"5px 10px",borderRadius:6,cursor:"pointer",border:"none",background:activeFilter==="concept"&&conceptQuery===cat?C.sbSurf:"none",color:activeFilter==="concept"&&conceptQuery===cat?C.sbInk:C.sbInkD,fontSize:16,textAlign:"left"}}>
+
+          <div style={{display:"flex",flexDirection:"column",gap:1}}>
+            {["Todas", ...cats].map(cat=>(
+              <button
+                key={cat}
+                onClick={()=>{
+                  if(cat==="Todas"){
+                    setSelectedCategory("");
+                    return;
+                  }
+                  setSelectedCategory(cat);
+                }}
+                style={{
+                  display:"flex",alignItems:"center",justifyContent:"space-between",
+                  padding:"5px 9px",borderRadius:6,cursor:"pointer",border:"none",
+                  background:(cat!=="Todas" && selectedCategory===cat) ? C.sbSurf : (!selectedCategory && cat==="Todas" ? C.sbSurf : "none"),
+                  color:(cat!=="Todas" && selectedCategory===cat) || (!selectedCategory && cat==="Todas") ? C.sbInk : C.sbInkD,
+                  fontSize:12,textAlign:"left",fontWeight:500
+                }}
+              >
                 <span>{cat}</span>
-                <span style={{fontSize:13,color:C.sbInkF}}>{cat==="Todos"?books.length:(catCounts[cat]||0)}</span>
+                <span style={{fontSize:11,color:C.sbInkF}}>
+                  {cat==="Todas" ? books.length : (catCounts[cat] || 0)}
+                </span>
               </button>
             ))}
           </div>
         </div>
 
-        {hasActiveFilter&&(
+        {hasActiveFilter && (
           <div style={{marginTop:8,display:"flex",alignItems:"center",gap:6,background:"rgba(255,255,255,.1)",border:"1px solid rgba(255,255,255,.18)",borderRadius:6,padding:"5px 10px"}}>
-            <span style={{fontSize:14,color:C.sbInk,flex:1}}>
-              {activeFilter==="search"&&`"${searchQ}"`}
-              {activeFilter==="tag"&&`Tag: ${tagQuery}`}
-              {activeFilter==="concept"&&`Conceito: ${conceptQuery}`}
+            <span style={{fontSize:12,color:C.sbInk,flex:1}}>
+              {searchQ.trim() && `Busca: ${searchQ}`}
+              {!searchQ.trim() && tagQuery.trim() && `Tag: ${tagQuery}`}
+              {!searchQ.trim() && !tagQuery.trim() && selectedCategory && `Categoria: ${selectedCategory}`}
             </span>
-            <button onClick={clearFilters} style={{background:"none",border:"none",cursor:"pointer",color:C.sbInk,display:"flex"}}><Ico d={D.close} sz={12}/></button>
+            <button onClick={clearFilters} style={{background:"none",border:"none",cursor:"pointer",color:C.sbInk,display:"flex"}}>
+              <Ico d={D.close} sz={12}/>
+            </button>
           </div>
         )}
       </div>
-            <div style={{flex:1,overflowY:"auto",padding:"8px 9px"}}>
+
+      <div style={{padding:"8px 9px 12px"}}>
         {filtered.map(b=>(
-          <div key={b.id} onClick={()=>openBook(b)}
-            style={{display:"flex",alignItems:"flex-start",gap:8,padding:"9px 9px",borderRadius:7,cursor:"pointer",border:`1px solid ${selBook?.id===b.id&&screen==="book"?"rgba(255,255,255,.45)":"transparent"}`,background:selBook?.id===b.id&&screen==="book"?C.sbSurf:"none",marginBottom:2}}>
-            <div style={{width:4,minWidth:4,height:44,borderRadius:2,background:spineC(b.id),marginTop:2}}/>
+          <div
+            key={b.id}
+            onClick={()=>openBook(b)}
+            style={{
+              display:"flex",alignItems:"flex-start",gap:8,padding:"8px 8px",borderRadius:7,cursor:"pointer",
+              border:`1px solid ${selBook?.id===b.id && screen==="book" ? "rgba(255,255,255,.45)" : "transparent"}`,
+              background:selBook?.id===b.id && screen==="book" ? C.sbSurf : "none",
+              marginBottom:2
+            }}
+          >
+            <div style={{width:4,minWidth:4,height:40,borderRadius:2,background:spineC(b.id),marginTop:2}}/>
             <div style={{flex:1,minWidth:0}}>
-              <div style={{fontSize:17,fontWeight:500,color:C.sbInk,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{b.title}</div>
-              {b.author&&<div style={{fontSize:14,color:C.sbInkD,marginTop:2,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{b.author}</div>}
-              {b.category&&<div style={{fontSize:12,color:C.sbInkF,marginTop:2}}>{b.category}</div>}
+              <div style={{fontSize:13,fontWeight:600,color:C.sbInk,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>
+                {b.title}
+              </div>
+              {b.author && (
+                <div style={{fontSize:12,color:C.sbInkD,marginTop:2,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>
+                  {b.author}
+                </div>
+              )}
+              <div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap",marginTop:3}}>
+                {b.category && <div style={{fontSize:10,color:C.sbInkF}}>{b.category}</div>}
+                {b._hasNotes && <div style={{fontSize:10,color:"#c7e4ff"}}>Notas</div>}
+              </div>
             </div>
           </div>
         ))}
-        {!filtered.length&&<p style={{fontSize:16,color:C.sbInkF,padding:"10px 4px"}}>{books.length===0?"Nenhum livro ainda.":"Sem resultados."}</p>}
+
+        {!filtered.length && (
+          <p style={{fontSize:13,color:C.sbInkF,padding:"10px 4px"}}>
+            {books.length===0 ? "Nenhum livro ainda." : "Sem resultados."}
+          </p>
+        )}
       </div>
 
       <input ref={fileRef} type="file" accept=".pdf" style={{display:"none"}} onChange={handleFilePick}/>
-      <button onClick={()=>fileRef.current?.click()}
-        style={{margin:"0 10px 14px",display:"flex",alignItems:"center",justifyContent:"center",gap:7,padding:"10px",border:"1px dashed rgba(255,255,255,.28)",borderRadius:7,cursor:"pointer",color:C.sbInk,fontSize:17,background:"none"}}>
+      <button
+        onClick={()=>fileRef.current?.click()}
+        style={{margin:"0 10px 14px",display:"flex",alignItems:"center",justifyContent:"center",gap:7,padding:"10px",border:"1px dashed rgba(255,255,255,.28)",borderRadius:7,cursor:"pointer",color:C.sbInk,fontSize:13,fontWeight:700,background:"none"}}
+      >
         <Ico d={D.up} sz={15}/> Adicionar livro (PDF)
       </button>
     </aside>
@@ -1399,11 +2014,19 @@ function Library({dirHandle,apiKey,userName:initUser}){
 
   const WelcomeBook=()=>(
     <div style={{background:C.surf,border:`1px solid ${C.border}`,borderRadius:10,padding:"20px 24px"}}>
-      <div style={{fontSize:22,fontWeight:500,color:C.accent,marginBottom:8}}>📖 Converse com este livro</div>
-      <p style={{fontSize:18,color:C.inkD,lineHeight:1.7}}>As respostas são baseadas exclusivamente no texto do livro, sem fontes externas.</p>
+      <div style={{fontSize:20,fontWeight:700,color:C.accent,marginBottom:8}}>📖 Converse com este livro</div>
+      <p style={{fontSize:15,color:C.inkD,lineHeight:1.7}}>
+        As respostas são baseadas exclusivamente no texto do livro.
+      </p>
       <div style={{display:"flex",flexWrap:"wrap",gap:9,marginTop:14}}>
         {["Qual é o tema central?","Faça um resumo","Principais conceitos","Quem são os personagens?"].map(s=>(
-          <button key={s} style={{fontSize:17,padding:"6px 14px",borderRadius:6,border:`1px solid ${C.border}`,background:"none",color:C.inkD,cursor:"pointer"}} onClick={suggClick(sendBook,s)}>{s}</button>
+          <button
+            key={s}
+            style={{fontSize:13,padding:"6px 12px",borderRadius:6,border:`1px solid ${C.border}`,background:"none",color:C.inkD,cursor:"pointer",fontWeight:500}}
+            onClick={suggClick(sendBook,s)}
+          >
+            {s}
+          </button>
         ))}
       </div>
     </div>
@@ -1411,12 +2034,23 @@ function Library({dirHandle,apiKey,userName:initUser}){
 
   const WelcomeGlobal=()=>(
     <div style={{background:C.surf,border:`1px solid ${C.border}`,borderRadius:10,padding:"20px 24px"}}>
-      <div style={{fontSize:22,fontWeight:500,color:C.accent,marginBottom:8,display:"flex",alignItems:"center",gap:8}}><Ico d={D.globe} sz={20}/> Pesquisa global</div>
-      <p style={{fontSize:18,color:C.inkD,lineHeight:1.7}}>Faça perguntas que cruzam múltiplos livros. A IA sempre indica de qual obra vem cada informação.{globalLoading&&<em style={{color:C.inkF}}> Carregando…</em>}</p>
-      {!globalLoading&&books.length>0&&(
+      <div style={{fontSize:20,fontWeight:700,color:C.accent,marginBottom:8,display:"flex",alignItems:"center",gap:8}}>
+        <Ico d={D.globe} sz={20}/> Pesquisa global
+      </div>
+      <p style={{fontSize:15,color:C.inkD,lineHeight:1.7}}>
+        Faça perguntas que cruzam múltiplos livros. A IA sempre indica de qual obra vem cada informação.
+        {globalLoading && <em style={{color:C.inkF}}> Carregando…</em>}
+      </p>
+      {!globalLoading && books.length>0 && (
         <div style={{display:"flex",flexWrap:"wrap",gap:9,marginTop:14}}>
           {["Quais livros falam sobre estratégia?","Compare os autores","Resuma cada livro em uma frase","Que temas se repetem?"].map(s=>(
-            <button key={s} style={{fontSize:17,padding:"6px 14px",borderRadius:6,border:`1px solid ${C.border}`,background:"none",color:C.inkD,cursor:"pointer"}} onClick={suggClick(sendGlobal,s)}>{s}</button>
+            <button
+              key={s}
+              style={{fontSize:13,padding:"6px 12px",borderRadius:6,border:`1px solid ${C.border}`,background:"none",color:C.inkD,cursor:"pointer",fontWeight:500}}
+              onClick={suggClick(sendGlobal,s)}
+            >
+              {s}
+            </button>
           ))}
         </div>
       )}
@@ -1426,89 +2060,120 @@ function Library({dirHandle,apiKey,userName:initUser}){
   return(
     <div style={{display:"flex",height:"100vh",color:C.ink,overflow:"hidden"}}>
       <Sidebar/>
-      <main style={{flex:1,overflow:"hidden",display:"flex",flexDirection:"column",background:C.bg}}>
 
-        {screen==="home"&&(
+      <main style={{flex:1,overflow:"hidden",display:"flex",flexDirection:"column",background:C.bg}}>
+        {screen==="home" && (
           <HomePage
             books={books}
             wishlist={wishlist}
             stats={stats}
             lastBook={lastBook}
-            onContinue={()=>{if(lastBook)openBook(lastBook);}}
-            onAddWish={()=>{setWishEdit(null);setWishModal(true);}}
-            onEditWish={w=>{setWishEdit(w);setWishModal(true);}}
+            onContinue={()=>{ if(lastBook) openBook(lastBook); }}
+            onAddWish={()=>{ setWishEdit(null); setWishModal(true); }}
+            onEditWish={w=>{ setWishEdit(w); setWishModal(true); }}
             onDeleteWish={deleteWish}
             onOpenBook={openBook}
-            onEditBook={b=>{setEditBook(b);setModal({type:"edit",initial:b});}}
+            onEditBook={b=>{ setEditBook(b); setModal({type:"edit",initial:b}); }}
             onDeleteBook={doDelete}
           />
         )}
 
-        {screen==="book"&&selBook&&(
+        {screen==="book" && selBook && (
           <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}}>
             <div style={{padding:"16px 28px",borderBottom:`1px solid ${C.border}`,display:"flex",alignItems:"flex-start",gap:12,background:C.surf}}>
               <button style={bI} onClick={()=>setScreen("home")}><Ico d={D.back} sz={15}/></button>
               <div style={{flex:1}}>
-                <div style={{fontSize:26,fontWeight:500,color:C.ink}}>{selBook.title}</div>
-                {selBook.author&&<div style={{fontSize:18,color:C.inkF,marginTop:3}}>{selBook.author}</div>}
+                <div style={{fontSize:24,fontWeight:700,color:C.ink}}>{selBook.title}</div>
+                {selBook.author && <div style={{fontSize:15,color:C.inkF,marginTop:3}}>{selBook.author}</div>}
                 <div style={{display:"flex",flexWrap:"wrap",gap:7,marginTop:8}}>
-                  {selBook.category&&<span style={{...tp,fontSize:14}}>Categoria: {selBook.category}</span>}
-                  {(selBook.tags||[]).length>0&&<span style={{fontSize:14,color:C.inkF}}>Tags: {(selBook.tags||[]).join(", ")}</span>}
-                  {selBook.pages&&<span style={{fontSize:15,color:C.inkF}}>{selBook.pages} pág.</span>}
+                  {selBook.category && <span style={{...tp,fontSize:12}}>Categoria: {selBook.category}</span>}
+                  {(selBook.tags||[]).length > 0 && <span style={{fontSize:13,color:C.inkF}}>Tags: {(selBook.tags||[]).join(", ")}</span>}
+                  {selBook.pages && <span style={{fontSize:13,color:C.inkF}}>{selBook.pages} pág.</span>}
                 </div>
               </div>
-              <button style={bI} onClick={()=>{setEditBook(selBook);setModal({type:"edit",initial:selBook});}}><Ico d={D.edit} sz={14}/></button>
+              <button style={bI} onClick={()=>{setEditBook(selBook); setModal({type:"edit",initial:selBook});}}><Ico d={D.edit} sz={14}/></button>
               <button style={{...bI,color:C.red}} onClick={()=>doDelete(selBook)}><Ico d={D.trash} sz={14}/></button>
             </div>
 
-            {selBook.summary&&(
+            {selBook.summary && (
               <div style={{padding:"13px 28px 0"}}>
-                <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:9,padding:"13px 20px",fontSize:18,color:C.inkD,lineHeight:1.75,fontStyle:"italic"}}>
-                  <strong style={{fontStyle:"normal",fontSize:13,letterSpacing:"0.1em",textTransform:"uppercase",color:C.gold}}>Resumo </strong>{selBook.summary}
+                <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:9,padding:"13px 20px",fontSize:15,color:C.inkD,lineHeight:1.75}}>
+                  <strong style={{fontSize:11,letterSpacing:"0.1em",textTransform:"uppercase",color:C.gold}}>Resumo </strong>
+                  {selBook.summary}
                 </div>
               </div>
             )}
 
-            <NotesPanel dirHandle={dirHandle} bookId={selBook.id} profileId={userName} otherProfiles={otherProfiles}/>
-            <ChatHistory sessions={chatSessions} otherSessions={otherSessions} activeId={activeChatId} onSelect={selectChat} onNew={newChat} otherProfileNames={otherProfiles}/>
-            <div style={{padding:"8px 28px 0",borderBottom:`1px solid ${C.border}`,borderTop:chatSessions.length||Object.keys(otherSessions).length?`1px solid ${C.border}`:"none"}}>
-              <div style={{...lb,paddingBottom:7,display:"flex",alignItems:"center",gap:6}}><Ico d={D.chat} sz={11}/> Conversa {activeChatId?"(continuando)":"(nova)"}</div>
+            <NotesPanel
+              dirHandle={dirHandle}
+              bookId={selBook.id}
+              profileId={userName}
+              otherProfiles={otherProfiles}
+              onNotesPresenceChange={(hasNotes)=>updateBookNotesPresence(selBook.id,hasNotes)}
+            />
+
+            <ChatHistory
+              sessions={chatSessions}
+              otherSessions={otherSessions}
+              activeId={activeChatId}
+              onSelect={selectChat}
+              onNew={newChat}
+              otherProfileNames={otherProfiles}
+            />
+
+            <div style={{padding:"8px 28px 0",borderBottom:`1px solid ${C.border}`,borderTop:chatSessions.length || Object.keys(otherSessions).length ? `1px solid ${C.border}` : "none"}}>
+              <div style={{...lb,paddingBottom:7,display:"flex",alignItems:"center",gap:6}}>
+                <Ico d={D.chat} sz={11}/> Conversa {activeChatId ? "(continuando)" : "(nova)"}
+              </div>
             </div>
-            <ChatArea messages={bookMsgs} loading={chatLoading} onSend={sendBook}
+
+            <ChatArea
+              messages={bookMsgs}
+              loading={chatLoading}
+              onSend={sendBook}
               placeholder="Pergunte algo sobre este livro…"
               onExport={()=>exportChat(bookMsgs,selBook.title)}
-              emptyNode={<WelcomeBook/>}/>
+              emptyNode={<WelcomeBook/>}
+            />
           </div>
         )}
 
-        {screen==="global"&&(
+        {screen==="global" && (
           <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}}>
             <div style={{padding:"16px 28px",borderBottom:`1px solid ${C.border}`,background:C.surf,display:"flex",alignItems:"center",gap:12}}>
               <button style={bI} onClick={()=>setScreen("home")}><Ico d={D.back} sz={15}/></button>
               <div>
-                <div style={{fontSize:23,fontWeight:500,color:C.ink,display:"flex",alignItems:"center",gap:8}}><Ico d={D.globe} sz={19} col={C.accent}/> Pesquisa na biblioteca</div>
-                <div style={{fontSize:15,color:C.inkF,marginTop:2}}>
-                  {books.length} livros {globalLoading?"| carregando…":globalTexts?"| pronto":""}{conceptLoading?" | buscando conceito…":""}
+                <div style={{fontSize:21,fontWeight:700,color:C.ink,display:"flex",alignItems:"center",gap:8}}>
+                  <Ico d={D.globe} sz={19} col={C.accent}/> Pesquisa na biblioteca
+                </div>
+                <div style={{fontSize:13,color:C.inkF,marginTop:2}}>
+                  {books.length} livros {globalLoading ? "| carregando…" : globalTexts ? "| pronto" : ""}
                 </div>
               </div>
             </div>
-            <ChatArea messages={globalMsgs} loading={chatLoading||globalLoading||conceptLoading}
-              onSend={globalTexts?sendGlobal:()=>{}}
-              placeholder={globalLoading?"Carregando livros…":"Pergunte sobre qualquer livro da biblioteca…"}
+
+            <ChatArea
+              messages={globalMsgs}
+              loading={chatLoading || globalLoading}
+              onSend={globalTexts ? sendGlobal : ()=>{}}
+              placeholder={globalLoading ? "Carregando livros…" : "Pergunte sobre qualquer livro da biblioteca…"}
               onExport={()=>exportChat(globalMsgs,"pesquisa_global")}
-              emptyNode={<WelcomeGlobal/>}/>
+              emptyNode={<WelcomeGlobal/>}
+            />
           </div>
         )}
       </main>
 
-      {modal?.type==="cats"&&<CatModal categories={cats} onSave={saveCats} onClose={()=>setModal(null)}/>}
-      {modal?.type==="add"&&<BookModal mode="add" initial={modal.initial} categories={cats} onSave={doAdd} onClose={()=>{setModal(null);setPendingFile(null);}} uploading={uploading} prog={upProg} err={upErr}/>}
-      {modal?.type==="edit"&&editBook&&<BookModal mode="edit" initial={modal.initial} categories={cats} onSave={doEdit} onClose={()=>{setModal(null);setEditBook(null);}} uploading={false} prog={0} err=""/>}
-      {wishModal&&<WishModal item={wishEdit} onSave={saveWish} onClose={()=>{setWishModal(false);setWishEdit(null);}}/>}
+      {modal?.type==="cats" && <CatModal categories={cats} onSave={saveCats} onClose={()=>setModal(null)}/>}
+      {modal?.type==="add" && <BookModal mode="add" initial={modal.initial} categories={cats} onSave={doAdd} onClose={()=>{setModal(null); setPendingFile(null);}} uploading={uploading} prog={upProg} err={upErr}/>}
+      {modal?.type==="edit" && editBook && <BookModal mode="edit" initial={modal.initial} categories={cats} onSave={doEdit} onClose={()=>{setModal(null); setEditBook(null);}} uploading={false} prog={0} err=""/>}
+      {wishModal && <WishModal item={wishEdit} onSave={saveWish} onClose={()=>{setWishModal(false); setWishEdit(null);}}/>}
+
       <style>{`@keyframes bob{0%,60%,100%{transform:translateY(0)}30%{transform:translateY(-6px)}}`}</style>
     </div>
   );
 }
+
 // ─── Root ─────────────────────────────────────────────────────────────────────
 function Root(){
   const [phase,setPhase]=useState("loading");
@@ -1517,23 +2182,36 @@ function Root(){
   const [userName,setUser]=useState("");
 
   useEffect(()=>{
-    if(!window.showDirectoryPicker){setPhase("unsupported");return;}
-    const savedUser=localStorage.getItem("bib_user");
-    const savedKey=localStorage.getItem("bib_apikey");
+    if(!window.showDirectoryPicker){
+      setPhase("unsupported");
+      return;
+    }
+
+    const savedUser=localStorage.getItem("mynd_user");
+    const savedKey=localStorage.getItem("mynd_apikey");
 
     idbGet("dir").then(async dh=>{
-      if(!dh){setPhase("setup");return;}
+      if(!dh){
+        setPhase("setup");
+        return;
+      }
       try{
         const perm=await dh.queryPermission({mode:"readwrite"});
         if(perm==="granted"){
-          const k=savedKey||(await rf(dh,"apikey.txt"))||"";
-          if(!k?.trim()||!savedUser){setPhase("setup");return;}
-          setDir(dh);setKey(k.trim());setUser(savedUser);setPhase("app");
+          const k=savedKey || (await rf(dh,"apikey.txt")) || "";
+          if(!k?.trim() || !savedUser){
+            setPhase("setup");
+            return;
+          }
+          setDir(dh);
+          setKey(k.trim());
+          setUser(savedUser);
+          setPhase("app");
         }else{
           setPhase("reconnect");
           window._pendingDir=dh;
-          window._pendingKey=savedKey||"";
-          window._pendingUser=savedUser||"";
+          window._pendingKey=savedKey || "";
+          window._pendingUser=savedUser || "";
         }
       }catch{
         setPhase("setup");
@@ -1544,25 +2222,37 @@ function Root(){
   const center=(msg,sub)=>(
     <div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",background:C.bg,textAlign:"center",padding:40}}>
       <div>
-        <div style={{fontSize:32,color:C.ink,marginBottom:12}}>{msg}</div>
-        {sub&&<p style={{fontSize:18,color:C.inkF,lineHeight:1.7,maxWidth:440}} dangerouslySetInnerHTML={{__html:sub}}/>}
+        <div style={{fontSize:30,color:C.ink,marginBottom:12,fontWeight:700}}>{msg}</div>
+        {sub && <p style={{fontSize:16,color:C.inkF,lineHeight:1.7,maxWidth:460}} dangerouslySetInnerHTML={{__html:sub}}/>}
       </div>
     </div>
   );
 
-  if(phase==="loading")return center("Carregando…");
-  if(phase==="unsupported")return center("Navegador não suportado","Esta versão requer <strong>Google Chrome</strong> ou Microsoft Edge (v86+).<br/>Firefox e Safari não suportam a File System Access API.");
+  if(phase==="loading") return center("Carregando…");
+  if(phase==="unsupported") return center(
+    "Navegador não suportado",
+    'Esta versão requer <strong>Google Chrome</strong> ou Microsoft Edge (v86+).<br/>Firefox e Safari não suportam a File System Access API.'
+  );
 
   if(phase==="reconnect"){
     const reconnect=async()=>{
       try{
         const dh=window._pendingDir;
         const perm=await dh.requestPermission({mode:"readwrite"});
-        if(perm!=="granted"){setPhase("setup");return;}
-        const k=window._pendingKey||(await rf(dh,"apikey.txt"))||"";
+        if(perm!=="granted"){
+          setPhase("setup");
+          return;
+        }
+        const k=window._pendingKey || (await rf(dh,"apikey.txt")) || "";
         const u=window._pendingUser;
-        if(!k||!u){setPhase("setup");return;}
-        setDir(dh);setKey(k.trim());setUser(u);setPhase("app");
+        if(!k || !u){
+          setPhase("setup");
+          return;
+        }
+        setDir(dh);
+        setKey(k.trim());
+        setUser(u);
+        setPhase("app");
       }catch{
         setPhase("setup");
       }
@@ -1571,19 +2261,26 @@ function Root(){
     return(
       <div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",background:C.bg,padding:40}}>
         <div style={{textAlign:"center",maxWidth:420}}>
-          <div style={{fontSize:32,color:C.ink,marginBottom:12}}>Reconectar pasta</div>
-          <p style={{fontSize:18,color:C.inkF,lineHeight:1.7,marginBottom:28}}>A permissão de acesso à pasta expirou. Clique para reconectar sem refazer o setup.</p>
-          <button onClick={reconnect} style={{...bP(false),fontSize:19,padding:"12px 32px"}}>
+          <div style={{fontSize:30,color:C.ink,marginBottom:12,fontWeight:700}}>Reconectar pasta</div>
+          <p style={{fontSize:16,color:C.inkF,lineHeight:1.7,marginBottom:28}}>
+            A permissão de acesso à pasta expirou. Clique para reconectar.
+          </p>
+          <button onClick={reconnect} style={{...bP(false),fontSize:15,padding:"12px 28px"}}>
             <Ico d={D.folder} sz={17} col={C.surf} style={{display:"inline",marginRight:8}}/> Reconectar pasta
           </button>
           <br/>
-          <button onClick={()=>setPhase("setup")} style={{...bG,marginTop:12,fontSize:16}}>Fazer setup novamente</button>
+          <button onClick={()=>setPhase("setup")} style={{...bG,marginTop:12,fontSize:14}}>
+            Fazer setup novamente
+          </button>
         </div>
       </div>
     );
   }
 
-  if(phase==="setup")return <Setup onReady={(dh,k,name)=>{setDir(dh);setKey(k);setUser(name);setPhase("app");}}/>;
+  if(phase==="setup"){
+    return <Setup onReady={(dh,k,name)=>{ setDir(dh); setKey(k); setUser(name); setPhase("app"); }} />;
+  }
+
   return <Library dirHandle={dirHandle} apiKey={apiKey} userName={userName}/>;
 }
 
