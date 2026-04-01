@@ -625,628 +625,629 @@ function WishModal({item,onSave,onClose}){
     </div>
   );
 }
-<!DOCTYPE html>
-<html lang="pt-BR">
-<head>
-<meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Mynd Library</title>
-<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
-<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-<style>
-* { box-sizing:border-box; margin:0; padding:0; }
-html,body,#root { height:100%; background:#f7f5f2; font-family:'Inter',sans-serif; }
-body { color:#1a1614; }
-</style>
-</head>
-<body>
-<div id="root"></div>
-
-<script type="text/babel">
-const { useState, useEffect, useRef, useMemo, useCallback } = React;
-
-// ─── Utils ────────────────────────────────────────────────────────────────────
-const uid = () => (
-  window.crypto?.randomUUID
-    ? window.crypto.randomUUID()
-    : `id_${Date.now()}_${Math.random().toString(36).slice(2,9)}`
-);
-
-const safeProfileKey = (name="") =>
-  name.replace(/[^\p{L}\p{N}_-]+/gu,"_").slice(0,80) || "perfil";
-
-const noteFileName = (bookId, profileId) =>
-  `${bookId}_notes_${safeProfileKey(profileId)}.json`;
-
-const chatFileName = (bookId, profileId) =>
-  `${bookId}_chats_${safeProfileKey(profileId)}.json`;
-
-// ─── IndexedDB ────────────────────────────────────────────────────────────────
-function openIDB(){
-  return new Promise((res,rej)=>{
-    const r=indexedDB.open("mynd_library_v2",1);
-    r.onupgradeneeded=e=>e.target.result.createObjectStore("s");
-    r.onsuccess=e=>res(e.target.result);
-    r.onerror=()=>rej(r.error);
-  });
-}
-async function idbGet(k){
-  const db=await openIDB();
-  return new Promise((res,rej)=>{
-    const r=db.transaction("s","readonly").objectStore("s").get(k);
-    r.onsuccess=()=>res(r.result ?? null);
-    r.onerror=()=>rej(r.error);
-  });
-}
-async function idbSet(k,v){
-  const db=await openIDB();
-  return new Promise((res,rej)=>{
-    const tx=db.transaction("s","readwrite");
-    tx.objectStore("s").put(v,k);
-    tx.oncomplete=res;
-    tx.onerror=()=>rej(tx.error);
-  });
+// ─── Note Card ────────────────────────────────────────────────────────────────
+function NoteCard({note,onEdit,onDelete,readonly=false,ownerName=""}){
+  return(
+    <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:8,padding:"12px 14px",marginBottom:9}}>
+      {ownerName && (
+        <div style={{...lb,color:C.gold,marginBottom:7,fontSize:10}}>
+          {ownerName}
+        </div>
+      )}
+      <div style={{whiteSpace:"pre-wrap",fontSize:14,color:C.inkD,lineHeight:1.7}}>
+        {note.text}
+      </div>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginTop:8}}>
+        <span style={{fontSize:12,color:C.inkF}}>
+          {note.updatedAt ? `Atualizada em ${new Date(note.updatedAt).toLocaleString("pt-BR")}` : ""}
+        </span>
+        {!readonly && (
+          <div style={{display:"flex",gap:7}}>
+            <button onClick={onEdit} style={{...bI,padding:"5px 9px"}}><Ico d={D.edit} sz={13}/></button>
+            <button onClick={onDelete} style={{...bI,padding:"5px 9px",color:C.red,borderColor:C.red+"44"}}><Ico d={D.trash} sz={13}/></button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
 }
 
-// ─── File System ──────────────────────────────────────────────────────────────
-async function wf(dir,name,txt){
-  const fh=await dir.getFileHandle(name,{create:true});
-  const w=await fh.createWritable();
-  await w.write(txt);
-  await w.close();
-}
-async function rf(dir,name){
-  try{
-    return await (await (await dir.getFileHandle(name)).getFile()).text();
-  }catch{
-    return null;
-  }
-}
-async function rmf(dir,name){
-  try{
-    await dir.removeEntry(name);
-  }catch{}
-}
-async function listDirFiles(dir){
-  const names=[];
-  try{
-    for await (const [name] of dir.entries()) names.push(name);
-  }catch{}
-  return names;
-}
-
-// ─── Index ────────────────────────────────────────────────────────────────────
-const DEF_CATS = [
-  "Ficcao",
-  "Negocios",
-  "Marketing",
-  "Biografia",
-  "Geopolitica",
-  "Current Affairs",
-  "Historia",
-  "Auto-Ajuda",
-  "Arte e Cultura"
-];
-
-async function loadIdx(dir){
-  const txt = await rf(dir,"index.json");
-  if(!txt){
-    return { books:[], categories:[...DEF_CATS], wishlist:[], profiles:[] };
-  }
-  try{
-    const d = JSON.parse(txt);
-    const categories = Array.isArray(d.categories) && d.categories.length
-      ? d.categories
-      : [...DEF_CATS];
-    const profiles = Array.isArray(d.profiles) ? d.profiles.filter(Boolean) : [];
-    return {
-      books: d.books || [],
-      categories,
-      wishlist: d.wishlist || [],
-      profiles
-    };
-  }catch{
-    return { books:[], categories:[...DEF_CATS], wishlist:[], profiles:[] };
-  }
-}
-async function saveIdx(dir,data){
-  await wf(dir,"index.json",JSON.stringify(data,null,2));
-}
-
-// ─── Chats ────────────────────────────────────────────────────────────────────
-async function loadChats(dir,bookId,profileId){
-  const txt=await rf(dir,chatFileName(bookId,profileId));
-  if(!txt) return [];
-  try{
-    return JSON.parse(txt);
-  }catch{
-    return [];
-  }
-}
-async function saveChats(dir,bookId,profileId,chats){
-  await wf(dir,chatFileName(bookId,profileId),JSON.stringify(chats,null,2));
-}
-
-// ─── Notes ────────────────────────────────────────────────────────────────────
-async function loadNotes(dir,bookId,profileId){
-  const txt=await rf(dir,noteFileName(bookId,profileId));
-  if(!txt) return [];
-  try{
-    const parsed=JSON.parse(txt);
-    if(Array.isArray(parsed)) return parsed;
-    if(typeof parsed==="string" && parsed.trim()){
-      return [{
-        id:uid(),
-        text:parsed,
-        createdAt:new Date().toISOString(),
-        updatedAt:new Date().toISOString()
-      }];
-    }
-    return [];
-  }catch{
-    if(txt.trim()){
-      return [{
-        id:uid(),
-        text:txt,
-        createdAt:new Date().toISOString(),
-        updatedAt:new Date().toISOString()
-      }];
-    }
-    return [];
-  }
-}
-async function saveNotes(dir,bookId,profileId,notes){
-  await wf(dir,noteFileName(bookId,profileId),JSON.stringify(notes,null,2));
-}
-
-// ─── Stats ────────────────────────────────────────────────────────────────────
-async function loadStats(dir){
-  const txt=await rf(dir,"stats.json");
-  if(!txt) return { consultations:{} };
-  try{
-    return JSON.parse(txt);
-  }catch{
-    return { consultations:{} };
-  }
-}
-async function saveStats(dir,stats){
-  await wf(dir,"stats.json",JSON.stringify(stats,null,2));
-}
-
-// ─── PDF.js ───────────────────────────────────────────────────────────────────
-let pdfjsOk=false;
-async function loadPdfLib(){
-  if(pdfjsOk || window.pdfjsLib){
-    pdfjsOk=true;
-    return;
-  }
-  await new Promise((res,rej)=>{
-    const s=document.createElement("script");
-    s.src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js";
-    s.onload=res;
-    s.onerror=rej;
-    document.head.appendChild(s);
-  });
-  window.pdfjsLib.GlobalWorkerOptions.workerSrc =
-    "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
-  pdfjsOk=true;
-}
-async function extractPdf(file){
-  await loadPdfLib();
-  const pdf=await window.pdfjsLib.getDocument({ data: await file.arrayBuffer() }).promise;
-  let t="";
-  for(let i=1;i<=pdf.numPages;i++){
-    const c=await (await pdf.getPage(i)).getTextContent();
-    t += c.items.map(x=>x.str).join(" ") + "\n";
-    if(t.length > 130000) break;
-  }
-  return { text:t.slice(0,130000), pages:pdf.numPages };
-}
-
-// ─── Claude ───────────────────────────────────────────────────────────────────
-async function callClaude(apiKey,system,messages,maxTok=1200){
-  const r=await fetch("https://api.anthropic.com/v1/messages",{
-    method:"POST",
-    headers:{
-      "Content-Type":"application/json",
-      "x-api-key":apiKey,
-      "anthropic-version":"2023-06-01",
-      "anthropic-dangerous-direct-browser-access":"true"
-    },
-    body:JSON.stringify({
-      model:"claude-3-5-haiku-20241022",
-      max_tokens:maxTok,
-      system,
-      messages:messages.map(m=>({ role:m.role, content:m.content }))
-    })
-  });
-  if(!r.ok){
-    const e=await r.json().catch(()=>({}));
-    throw new Error(e?.error?.message || `HTTP ${r.status}`);
-  }
-  return (await r.json()).content?.[0]?.text || "Sem resposta.";
-}
-
-const sysBook=(title,text)=>`Você é um assistente literário especializado no livro "${title}". Responda APENAS com base no conteúdo abaixo. Não use conhecimento externo. Se não encontrar, diga claramente. Responda em português e cite trechos quando útil.
-
-CONTEÚDO:
-${text.slice(0,85000)}`;
-
-const sysGlobal=(books,texts)=>{
-  const per = books.length ? Math.floor(74000/books.length) : 0;
-  let s = `Você é um assistente com acesso à biblioteca completa (${books.length} livros). Sempre indique de qual livro vem a informação. Use APENAS o conteúdo abaixo. Responda em português.
-
-BIBLIOTECA:`;
-  for(const b of books){
-    s += `
-
-${"─".repeat(48)}
-📖 ${b.title}${b.author?` | ${b.author}`:""}${b.category?` [${b.category}]`:""}
-${"─".repeat(48)}
-${(texts[b.id] || "").slice(0,Math.max(per,1500))}`;
-  }
-  return s;
-};
-
-const sysSummary=title=>`Leia o trecho do livro "${title}" e escreva um resumo em 3 frases em português: (1) do que trata, (2) para quem é ideal, (3) principal aprendizado. Apenas as 3 frases, sem introdução.`;
-
-// ─── Theme ────────────────────────────────────────────────────────────────────
-const C = {
-  bg:"#f7f5f2", surf:"#ffffff", card:"#f0ede8", cardH:"#e8e4de",
-  border:"#e2ddd7", borderL:"#ece9e4",
-  ink:"#1a1614", inkD:"#3d3530", inkF:"#8c8076",
-
-  sb:"#1a2d45", sbSurf:"#223858", sbBorder:"#2d4a6e",
-  sbInk:"#ffffff", sbInkD:"rgba(255,255,255,.82)", sbInkF:"rgba(255,255,255,.62)",
-
-  accent:"#2d6be4", accentBg:"rgba(45,107,228,.08)", accentBrd:"rgba(45,107,228,.25)",
-  gold:"#7a5a1a", goldM:"#9a7020", goldBg:"rgba(122,90,26,.08)", goldBrd:"rgba(122,90,26,.25)",
-  blue:"#1e4a72", blueBg:"rgba(30,74,114,.07)", blueBrd:"rgba(30,74,114,.22)",
-  green:"#1e5c2e", red:"#7a1e1e",
-};
-
-const SPINES=["#1e4a72","#522870","#7a2020","#1a5c3a","#6e5010","#1e3e70","#6e2050","#2e5c10","#5a5010","#1a5c58"];
-const spineC=id=>SPINES[Math.abs(String(id).split("").reduce((a,c)=>a+c.charCodeAt(0),0)) % SPINES.length];
-
-// ─── Icons ────────────────────────────────────────────────────────────────────
-const Ico=({d,sz=16,col,style={}})=>(
-  <svg width={sz} height={sz} viewBox="0 0 24 24" fill="none" stroke={col||"currentColor"} strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" style={style}>
-    <path d={d}/>
-  </svg>
-);
-const D = {
-  book:"M4 19.5A2.5 2.5 0 0 1 6.5 17H20M4 4.5A2.5 2.5 0 0 1 6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5z",
-  up:"M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12",
-  trash:"M3 6h18M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2",
-  send:"M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z",
-  back:"M19 12H5M12 5l-7 7 7 7",
-  search:"M21 21l-4.35-4.35M17 11A6 6 0 1 1 5 11a6 6 0 1 1 12 0z",
-  edit:"M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z",
-  close:"M18 6L6 18M6 6l12 12",
-  globe:"M12 22c5.523 0 10-4.477 10-10S17.523 2 12 2 2 6.477 2 12s4.477 10 10 10zM2 12h20M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z",
-  tag:"M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82zM7 7h.01",
-  folder:"M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z",
-  check:"M20 6L9 17l-5-5",
-  plus:"M12 5v14M5 12h14",
-  note:"M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8zM14 2v6h6M16 13H8M16 17H8M10 9H8",
-  dl:"M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3",
-  home:"M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2zM9 22V12h6v10",
-  heart:"M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z",
-  link:"M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71",
-  list:"M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01",
-  chat:"M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z",
-  user:"M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2M12 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8z",
-  chevDown:"M6 9l6 6 6-6",
-  play:"M5 3l14 9-14 9V3z",
-  save:"M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2zM17 21v-8H7v8M7 3v5h8",
-};
-
-// ─── Base styles ──────────────────────────────────────────────────────────────
-const ov = {
-  position:"fixed", inset:0, background:"rgba(10,20,40,.55)",
-  display:"flex", alignItems:"center", justifyContent:"center",
-  zIndex:200, backdropFilter:"blur(3px)"
-};
-
-const mb = {
-  background:C.surf, border:`1px solid ${C.border}`, borderRadius:12,
-  padding:24, width:520, maxWidth:"93vw", maxHeight:"90vh", overflowY:"auto",
-  boxShadow:"0 20px 60px rgba(0,0,0,.14)"
-};
-
-const fi = {
-  width:"100%", background:C.bg, border:`1px solid ${C.border}`, borderRadius:7,
-  padding:"10px 12px", color:C.ink, fontSize:15, outline:"none"
-};
-
-const bG = {
-  background:"none", border:`1px solid ${C.border}`, color:C.inkD,
-  padding:"8px 16px", borderRadius:7, cursor:"pointer", fontSize:14, fontWeight:500
-};
-
-const bP = d => ({
-  background:d ? "#d0ccc8" : C.accent,
-  border:"none",
-  color:d ? "#999" : C.surf,
-  padding:"9px 18px",
-  borderRadius:7,
-  cursor:d ? "not-allowed" : "pointer",
-  fontSize:14,
-  fontWeight:600
-});
-
-const bI = {
-  background:"none", border:`1px solid ${C.border}`, color:C.inkF,
-  padding:"6px", borderRadius:6, cursor:"pointer", display:"flex", alignItems:"center"
-};
-
-const lb = {
-  fontSize:11, letterSpacing:"0.12em", textTransform:"uppercase", color:C.inkF, fontWeight:600
-};
-
-const tp = {
-  fontSize:12, padding:"3px 9px", borderRadius:12,
-  background:C.accentBg, color:C.accent, border:`1px solid ${C.accentBrd}`, fontWeight:500
-};
-
-const sbLb = {
-  fontSize:10, letterSpacing:"0.12em", textTransform:"uppercase", color:C.sbInkF, fontWeight:600
-};
-
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-function truncateText(str="", max=70){
-  if(str.length <= max) return str;
-  return str.slice(0,max-1).trim() + "…";
-}
-
-function joinTags(tags=[]){
-  return tags.length ? tags.join(", ") : "—";
-}
-
-// ─── TagInput ─────────────────────────────────────────────────────────────────
-function TagInput({tags,onChange}){
+// ─── Notes Panel ──────────────────────────────────────────────────────────────
+function NotesPanel({dirHandle,bookId,profileId,otherProfiles,onNotesPresenceChange}){
+  const [myNotes,setMyNotes]=useState([]);
+  const [saved,setSaved]=useState(true);
+  const [ready,setReady]=useState(false);
+  const [viewMode,setViewMode]=useState(profileId);
+  const [otherNotes,setOtherNotes]=useState({});
   const [draft,setDraft]=useState("");
-  const ref=useRef();
+  const [editingId,setEditingId]=useState(null);
 
-  const commit=useCallback(()=>{
-    const t=draft.trim();
-    if(!t || tags.includes(t)){
-      setDraft("");
-      return;
+  const tabs = useMemo(()=>[profileId, ...otherProfiles, "Todas"], [profileId,otherProfiles]);
+
+  const refreshMine=useCallback(async()=>{
+    const notes=await loadNotes(dirHandle,bookId,profileId);
+    setMyNotes(notes);
+    onNotesPresenceChange?.(notes.length > 0);
+    setReady(true);
+  },[dirHandle,bookId,profileId,onNotesPresenceChange]);
+
+  useEffect(()=>{
+    refreshMine();
+  },[refreshMine]);
+
+  useEffect(()=>{
+    const loadOthers=async()=>{
+      const result={};
+      for(const p of otherProfiles){
+        const notes=await loadNotes(dirHandle,bookId,p);
+        if(notes.length) result[p]=notes;
+      }
+      setOtherNotes(result);
+    };
+    loadOthers();
+  },[viewMode,bookId,otherProfiles,dirHandle]);
+
+  const saveList=async(next)=>{
+    setMyNotes(next);
+    setSaved(false);
+    await saveNotes(dirHandle,bookId,profileId,next);
+    onNotesPresenceChange?.(next.length > 0);
+    setSaved(true);
+  };
+
+  const addOrUpdate=async()=>{
+    const text=draft.trim();
+    if(!text) return;
+
+    if(editingId){
+      const next=myNotes.map(n=>n.id===editingId ? {...n,text,updatedAt:new Date().toISOString()} : n);
+      await saveList(next);
+      setEditingId(null);
+    }else{
+      const next=[{
+        id:uid(),
+        text,
+        createdAt:new Date().toISOString(),
+        updatedAt:new Date().toISOString()
+      }, ...myNotes];
+      await saveList(next);
     }
-    onChange([...tags,t]);
     setDraft("");
-    setTimeout(()=>ref.current?.focus(),0);
-  },[draft,tags,onChange]);
+  };
+
+  const startEdit=(note)=>{
+    setDraft(note.text);
+    setEditingId(note.id);
+  };
+
+  const removeNote=async(id)=>{
+    const next=myNotes.filter(n=>n.id!==id);
+    await saveList(next);
+    if(editingId===id){
+      setEditingId(null);
+      setDraft("");
+    }
+  };
+
+  if(!ready) return null;
+
+  const renderOwnSection = () => (
+    <div>
+      <div style={{background:C.surf,border:`1px solid ${C.border}`,borderRadius:9,padding:"12px 12px 10px",marginBottom:12}}>
+        <textarea
+          value={draft}
+          onChange={e=>setDraft(e.target.value)}
+          placeholder="Escreva uma nota e salve separadamente"
+          style={{
+            ...fi, resize:"vertical", minHeight:90, lineHeight:1.7, fontSize:14,
+            border:"none", background:"transparent", padding:0
+          }}
+        />
+        <div style={{display:"flex",justifyContent:"flex-end",gap:8,marginTop:10}}>
+          {editingId && <button onClick={()=>{setEditingId(null); setDraft("");}} style={bG}>Cancelar</button>}
+          <button onClick={addOrUpdate} style={bP(!draft.trim())} disabled={!draft.trim()}>
+            <Ico d={editingId?D.check:D.save} sz={15} col={draft.trim()?C.surf:"#999"} style={{marginRight:8}}/>
+            {editingId ? "Salvar edição" : "Salvar nota"}
+          </button>
+        </div>
+      </div>
+
+      {myNotes.length===0
+        ? <p style={{fontSize:14,color:C.inkF,fontStyle:"italic",padding:"2px 0 8px"}}>Nenhuma nota salva ainda.</p>
+        : myNotes.map(note=>(
+            <NoteCard
+              key={note.id}
+              note={note}
+              onEdit={()=>startEdit(note)}
+              onDelete={()=>removeNote(note.id)}
+            />
+          ))
+      }
+    </div>
+  );
+
+  const renderReadOnlySection = (name, notes) => (
+    <div style={{marginBottom:10}}>
+      <div style={{...lb,marginBottom:6,color:C.gold,fontSize:10}}>{name}</div>
+      {notes.length === 0
+        ? <p style={{fontSize:14,color:C.inkF,fontStyle:"italic",padding:"2px 0 8px"}}>Nenhuma nota.</p>
+        : notes.map(note=>(
+            <NoteCard key={note.id} note={note} readonly ownerName={name} />
+          ))
+      }
+    </div>
+  );
 
   return(
-    <div style={{background:C.bg,border:`1px solid ${C.border}`,borderRadius:7,padding:"8px 10px",minHeight:44}}>
-      {tags.length > 0 && (
-        <div style={{display:"flex",flexWrap:"wrap",gap:6,marginBottom:8}}>
-          {tags.map(t=>(
-            <span key={t} style={{...tp,display:"flex",alignItems:"center",gap:5}}>
-              {t}
+    <div style={{padding:"12px 28px 0"}}>
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8,gap:10,flexWrap:"wrap"}}>
+        <div style={{...lb,display:"flex",alignItems:"center",gap:6}}>
+          <Ico d={D.note} sz={11}/> Notas
+        </div>
+
+        <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
+          <div style={{display:"flex",gap:4,flexWrap:"wrap"}}>
+            {tabs.map(label=>(
               <button
-                type="button"
-                onClick={e=>{e.preventDefault(); onChange(tags.filter(x=>x!==t));}}
-                style={{background:"none",border:"none",cursor:"pointer",color:C.accent,padding:0,lineHeight:1,display:"flex"}}
+                key={label}
+                onClick={()=>setViewMode(label)}
+                style={{
+                  fontSize:12,
+                  padding:"3px 9px",
+                  borderRadius:5,
+                  border:`1px solid ${viewMode===label?C.accentBrd:C.border}`,
+                  background:viewMode===label?C.accentBg:"none",
+                  cursor:"pointer",
+                  color:viewMode===label?C.accent:C.inkF,
+                  fontWeight:500
+                }}
               >
-                <Ico d={D.close} sz={11}/>
+                {label}
               </button>
-            </span>
+            ))}
+          </div>
+          <span style={{fontSize:12,color:saved?C.green:C.inkF,transition:"color .3s"}}>
+            {saved ? "✓ salvo" : "salvando…"}
+          </span>
+        </div>
+      </div>
+
+      {viewMode === profileId && renderOwnSection()}
+
+      {viewMode !== profileId && viewMode !== "Todas" && (
+        renderReadOnlySection(viewMode, otherNotes[viewMode] || [])
+      )}
+
+      {viewMode === "Todas" && (
+        <div>
+          <div style={{marginBottom:12}}>
+            <div style={{...lb,marginBottom:6,color:C.accent,fontSize:10}}>{profileId}</div>
+            {myNotes.length===0
+              ? <p style={{fontSize:14,color:C.inkF,fontStyle:"italic",padding:"2px 0 8px"}}>Nenhuma nota.</p>
+              : myNotes.map(note=>(
+                  <NoteCard
+                    key={note.id}
+                    note={note}
+                    onEdit={()=>startEdit(note)}
+                    onDelete={()=>removeNote(note.id)}
+                    ownerName={profileId}
+                  />
+                ))
+            }
+          </div>
+
+          {otherProfiles.map(p=>(
+            <div key={p}>
+              {renderReadOnlySection(p, otherNotes[p] || [])}
+            </div>
           ))}
         </div>
       )}
-      <div style={{display:"flex",gap:7,alignItems:"center"}}>
-        <input
-          ref={ref}
-          value={draft}
-          onChange={e=>setDraft(e.target.value)}
-          onKeyDown={e=>{ if(e.key==="Enter"){ e.preventDefault(); commit(); } }}
-          placeholder="Escreva e pressione Enter ou +"
-          style={{flex:1,background:"none",border:"none",outline:"none",color:C.ink,fontSize:14}}
-        />
-        <button
-          type="button"
-          onClick={e=>{e.preventDefault(); commit();}}
-          disabled={!draft.trim()}
-          style={{
-            background:draft.trim()?C.accentBg:"none",
-            border:`1px solid ${draft.trim()?C.accentBrd:C.border}`,
-            borderRadius:5,padding:"4px 10px",
-            cursor:draft.trim()?"pointer":"default",
-            color:draft.trim()?C.accent:C.inkF,
-            display:"flex",alignItems:"center"
-          }}
-        >
-          <Ico d={D.plus} sz={15}/>
-        </button>
-      </div>
     </div>
   );
 }
 
-// ─── BookModal ────────────────────────────────────────────────────────────────
-function BookModal({mode,initial,categories,onSave,onClose,uploading,prog,err}){
-  const [d,setD]=useState({ title:"", author:"", category:categories[0]||"", tags:[], ...initial });
-  const set=(k,v)=>setD(p=>({...p,[k]:v}));
+// ─── Chat Area ────────────────────────────────────────────────────────────────
+function ChatArea({messages,loading,onSend,placeholder,emptyNode,onExport}){
+  const [input,setInput]=useState("");
+  const endRef=useRef();
+  const inputRef=useRef();
 
-  return(
-    <div style={ov} onClick={e=>{ if(e.target===e.currentTarget) onClose(); }}>
-      <div style={mb}>
-        <div style={{fontSize:22,fontWeight:600,color:C.ink,marginBottom:18}}>
-          {mode==="add" ? "Adicionar ao acervo" : "Editar livro"}
-        </div>
+  useEffect(()=>{
+    endRef.current?.scrollIntoView({behavior:"smooth"});
+  },[messages,loading]);
 
-        <div style={{marginBottom:14}}>
-          <div style={{...lb,marginBottom:6}}>Título *</div>
-          <input style={fi} value={d.title} onChange={e=>set("title",e.target.value)} placeholder="Título do livro" />
-        </div>
+  const send=()=>{
+    const t=input.trim();
+    if(!t || loading) return;
+    onSend(t);
+    setInput("");
+    setTimeout(()=>inputRef.current?.focus(),0);
+  };
 
-        <div style={{marginBottom:14}}>
-          <div style={{...lb,marginBottom:6}}>Autor</div>
-          <input style={fi} value={d.author} onChange={e=>set("author",e.target.value)} placeholder="Nome do autor" />
-        </div>
-
-        <div style={{marginBottom:14}}>
-          <div style={{...lb,marginBottom:6}}>Categoria</div>
-          <select style={fi} value={d.category} onChange={e=>set("category",e.target.value)}>
-            {categories.map(c=>(
-              <option key={c} style={{background:C.surf}}>{c}</option>
-            ))}
-          </select>
-        </div>
-
-        <div style={{marginBottom:18}}>
-          <div style={{...lb,marginBottom:6}}>Tags</div>
-          <TagInput tags={d.tags} onChange={t=>set("tags",t)} />
-        </div>
-
-        {uploading && (
-          <div style={{marginBottom:12}}>
-            <div style={{height:4,background:C.border,borderRadius:2,overflow:"hidden"}}>
-              <div style={{height:"100%",background:C.accent,width:`${prog}%`,transition:"width .3s",borderRadius:2}}/>
-            </div>
-            <p style={{fontSize:13,color:C.inkF,marginTop:5}}>Processando PDF e gerando resumo…</p>
-          </div>
-        )}
-
-        {err && <p style={{fontSize:13,color:C.red,marginBottom:12}}>{err}</p>}
-
-        <div style={{display:"flex",gap:10,justifyContent:"flex-end"}}>
-          <button style={bG} onClick={onClose}>Cancelar</button>
-          <button
-            style={bP(!d.title.trim() || uploading)}
-            disabled={!d.title.trim() || uploading}
-            onClick={()=>onSave(d)}
-          >
-            {uploading ? "Processando…" : mode==="add" ? "Adicionar" : "Salvar"}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ─── Category Modal ───────────────────────────────────────────────────────────
-function CatModal({categories,onSave,onClose}){
-  const [cats,setCats]=useState([...categories]);
-  const [nv,setNv]=useState("");
-  const [ed,setEd]=useState(null);
-
-  const add=()=>{
-    const v=nv.trim();
-    if(!v || cats.includes(v)){
-      setNv("");
-      return;
+  const onKey=e=>{
+    if(e.key==="Enter" && !e.shiftKey){
+      e.preventDefault();
+      send();
     }
-    setCats(p=>[...p,v]);
-    setNv("");
   };
 
   return(
-    <div style={ov} onClick={e=>{ if(e.target===e.currentTarget) onClose(); }}>
-      <div style={{...mb,width:430}}>
-        <div style={{fontSize:22,fontWeight:600,color:C.ink,marginBottom:18}}>Gerenciar categorias</div>
+    <>
+      <div style={{flex:1,overflowY:"auto",padding:"24px 28px",display:"flex",flexDirection:"column",gap:16}}>
+        {messages.length===0 && emptyNode}
 
-        <div style={{display:"flex",flexDirection:"column",gap:6,marginBottom:16}}>
-          {cats.map((c,i)=>(
-            <div key={i} style={{display:"flex",alignItems:"center",gap:8,background:C.card,border:`1px solid ${C.border}`,borderRadius:7,padding:"8px 10px"}}>
-              {ed?.i===i ? (
-                <>
-                  <input
-                    autoFocus
-                    value={ed.v}
-                    onChange={e=>setEd(p=>({...p,v:e.target.value}))}
-                    onKeyDown={e=>{
-                      if(e.key==="Enter"){
-                        const val=ed.v.trim();
-                        if(val) setCats(p=>p.map((x,j)=>j===i?val:x));
-                        setEd(null);
-                      }
-                      if(e.key==="Escape") setEd(null);
-                    }}
-                    style={{...fi,padding:"4px 8px",fontSize:14,flex:1}}
-                  />
-                  <button
-                    style={{...bI,borderColor:C.accentBrd,color:C.accent}}
-                    onClick={()=>{
-                      const val=ed.v.trim();
-                      if(val) setCats(p=>p.map((x,j)=>j===i?val:x));
-                      setEd(null);
-                    }}
-                  >
-                    <Ico d={D.check} sz={14}/>
-                  </button>
-                  <button style={bI} onClick={()=>setEd(null)}>
-                    <Ico d={D.close} sz={13}/>
-                  </button>
-                </>
-              ) : (
-                <>
-                  <span style={{flex:1,fontSize:15,color:C.ink}}>{c}</span>
-                  <button style={bI} onClick={()=>setEd({i,v:c})}><Ico d={D.edit} sz={13}/></button>
-                  <button style={{...bI,color:C.red,borderColor:C.red+"44"}} onClick={()=>setCats(p=>p.filter((_,j)=>j!==i))}><Ico d={D.trash} sz={13}/></button>
-                </>
-              )}
+        {messages.map((m,i)=>(
+          <div
+            key={i}
+            style={{
+              display:"flex",
+              gap:12,
+              flexDirection:m.role==="user" ? "row-reverse" : "row",
+              alignSelf:m.role==="user" ? "flex-end" : "flex-start",
+              maxWidth:780
+            }}
+          >
+            <div
+              style={{
+                width:34,height:34,minWidth:34,borderRadius:"50%",
+                display:"flex",alignItems:"center",justifyContent:"center",
+                fontSize:13,marginTop:3,
+                background:m.role==="user"?"rgba(45,107,228,.12)":"rgba(122,90,26,.1)",
+                color:m.role==="user"?C.accent:C.gold,fontWeight:700
+              }}
+            >
+              {m.role==="user" ? m.av : "✦"}
             </div>
-          ))}
-        </div>
 
-        <div style={{display:"flex",gap:8,marginBottom:22}}>
-          <input
-            value={nv}
-            onChange={e=>setNv(e.target.value)}
-            onKeyDown={e=>{ if(e.key==="Enter") add(); }}
-            placeholder="Nova categoria…"
-            style={{...fi,flex:1}}
+            <div
+              style={{
+                padding:"13px 16px",
+                borderRadius:9,
+                fontSize:15,
+                lineHeight:1.7,
+                whiteSpace:"pre-wrap",
+                background:m.role==="user" ? "#eaf0fb" : C.card,
+                border:`1px solid ${m.role==="user"?C.accentBrd:C.border}`,
+                color:C.ink
+              }}
+            >
+              {m.content}
+            </div>
+          </div>
+        ))}
+
+        {loading && (
+          <div style={{display:"flex",gap:12,alignSelf:"flex-start"}}>
+            <div style={{width:34,height:34,borderRadius:"50%",background:"rgba(122,90,26,.1)",display:"flex",alignItems:"center",justifyContent:"center",color:C.gold,fontSize:16}}>
+              ✦
+            </div>
+            <div style={{padding:"16px 20px",borderRadius:9,background:C.card,border:`1px solid ${C.border}`,display:"flex",gap:6,alignItems:"center"}}>
+              {[0,1,2].map(i=>(
+                <span key={i} style={{width:8,height:8,borderRadius:"50%",background:C.gold,display:"inline-block",animation:`bob .9s ${i*.2}s infinite`}}/>
+              ))}
+            </div>
+          </div>
+        )}
+
+        <div ref={endRef}/>
+      </div>
+
+      <div style={{padding:"14px 28px 20px",borderTop:`1px solid ${C.border}`,background:C.surf}}>
+        {messages.length>0 && onExport && (
+          <div style={{display:"flex",justifyContent:"flex-end",marginBottom:9}}>
+            <button onClick={onExport} style={{...bI,gap:5,fontSize:13,padding:"5px 12px"}}>
+              <Ico d={D.dl} sz={13}/> Exportar conversa
+            </button>
+          </div>
+        )}
+
+        <div style={{display:"flex",gap:10,alignItems:"flex-end",background:C.bg,border:`1px solid ${C.border}`,borderRadius:9,padding:"10px 14px"}}>
+          <textarea
+            ref={inputRef}
+            rows={1}
+            value={input}
+            onChange={e=>setInput(e.target.value)}
+            onKeyDown={onKey}
+            placeholder={placeholder}
+            style={{flex:1,background:"none",border:"none",outline:"none",color:C.ink,fontSize:15,resize:"none",maxHeight:120,lineHeight:1.6}}
           />
-          <button style={bP(!nv.trim())} disabled={!nv.trim()} onClick={add}>
-            <Ico d={D.plus} sz={16}/>
+          <button
+            onClick={send}
+            disabled={!input.trim() || loading}
+            style={{
+              background:input.trim() && !loading ? C.accent : "#d0ccc8",
+              border:"none", borderRadius:6,
+              color:input.trim() && !loading ? C.surf : "#999",
+              padding:"8px 12px",
+              cursor:input.trim() && !loading ? "pointer" : "not-allowed",
+              display:"flex"
+            }}
+          >
+            <Ico d={D.send} sz={16}/>
           </button>
         </div>
+      </div>
+    </>
+  );
+}
 
-        <div style={{display:"flex",gap:10,justifyContent:"flex-end"}}>
-          <button style={bG} onClick={onClose}>Cancelar</button>
-          <button style={bP(false)} onClick={()=>onSave(cats)}>Salvar</button>
+// ─── Chat History ─────────────────────────────────────────────────────────────
+function ChatHistory({sessions,otherSessions,activeId,onSelect,onNew,otherProfileNames=[]}){
+  const [tab,setTab]=useState("mine");
+  const allOther=Object.entries(otherSessions || {}).flatMap(([p,ss])=>ss.map(s=>({...s,_profile:p})));
+  const hasOther=allOther.length>0;
+  const otherTabLabel=otherProfileNames.length===1 ? otherProfileNames[0] : "Outros perfis";
+
+  if(!sessions.length && !hasOther) return null;
+
+  const renderSession=(s,showProfile=false)=>(
+    <button
+      key={`${s.id}_${showProfile?s._profile||"":""}`}
+      onClick={()=>onSelect(s)}
+      style={{
+        textAlign:"left",
+        padding:"7px 10px",
+        borderRadius:6,
+        border:`1px solid ${s.id===activeId?C.accentBrd:"transparent"}`,
+        background:s.id===activeId?C.accentBg:"none",
+        cursor:"pointer",
+        color:s.id===activeId?C.accent:C.inkD,
+        fontSize:13,
+        display:"flex",
+        alignItems:"center",
+        gap:7,
+        width:"100%"
+      }}
+    >
+      <Ico d={D.chat} sz={13} col={s.id===activeId?C.accent:C.inkF}/>
+      <span style={{flex:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+        {s.title || "Sem título"}
+      </span>
+      {showProfile && <span style={{fontSize:11,color:C.gold,flexShrink:0,fontStyle:"italic"}}>{s._profile}</span>}
+      <span style={{fontSize:11,color:C.inkF,flexShrink:0}}>{s.date}</span>
+    </button>
+  );
+
+  return(
+    <div style={{padding:"10px 28px 0",borderTop:`1px solid ${C.border}`}}>
+      <div style={{...lb,marginBottom:8,display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+        <div style={{display:"flex",alignItems:"center",gap:8}}>
+          <Ico d={D.chat} sz={11}/>
+          {hasOther ? (
+            <div style={{display:"flex",gap:4}}>
+              {[["mine","Minhas"],["other",otherTabLabel]].map(([t,label])=>(
+                <button
+                  key={t}
+                  onClick={()=>setTab(t)}
+                  style={{
+                    fontSize:11,
+                    padding:"2px 8px",
+                    borderRadius:4,
+                    border:`1px solid ${tab===t?C.accentBrd:C.border}`,
+                    background:tab===t?C.accentBg:"none",
+                    cursor:"pointer",
+                    color:tab===t?C.accent:C.inkF,
+                    letterSpacing:"0.1em",
+                    textTransform:"uppercase",
+                    fontWeight:600
+                  }}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          ) : (
+            <span>Conversas anteriores</span>
+          )}
         </div>
+
+        <button onClick={onNew} style={{background:"none",border:"none",cursor:"pointer",color:C.accent,fontSize:12,display:"flex",alignItems:"center",gap:4,fontWeight:600}}>
+          <Ico d={D.plus} sz={11}/> Nova
+        </button>
+      </div>
+
+      <div style={{display:"flex",flexDirection:"column",gap:3,maxHeight:140,overflowY:"auto"}}>
+        {tab==="mine" && sessions.map(s=>renderSession(s,false))}
+        {tab==="other" && (
+          allOther.length===0
+            ? <p style={{fontSize:13,color:C.inkF,fontStyle:"italic",padding:"4px 0"}}>Nenhuma conversa de outros perfis.</p>
+            : allOther.map(s=>renderSession(s,true))
+        )}
       </div>
     </div>
   );
 }
 
-// ─── Wishlist Modal ───────────────────────────────────────────────────────────
-function WishModal({item,onSave,onClose}){
-  const [d,setD]=useState({ title:"", author:"", link:"", ...(item||{}) });
-  const set=(k,v)=>setD(p=>({...p,[k]:v}));
+// ─── Home Page ────────────────────────────────────────────────────────────────
+function HomePage({
+  books,wishlist,onAddWish,onEditWish,onDeleteWish,lastBook,onContinue,
+  stats,onOpenBook,onEditBook,onDeleteBook
+}){
+  const [sortCol,setSortCol]=useState("addedAt");
+  const [sortAsc,setSortAsc]=useState(false);
+
+  const totalPages=useMemo(()=>books.reduce((s,b)=>s+(b.pages||0),0),[books]);
+  const withChats=useMemo(()=>books.filter(b=>b._hasChats).length,[books]);
+  const withNotes=useMemo(()=>books.filter(b=>b._hasNotes).length,[books]);
+
+  const mostConsulted=useMemo(()=>{
+    const c=stats?.consultations || {};
+    const top=Object.entries(c).sort((a,b)=>b[1]-a[1])[0];
+    return top ? books.find(bk=>bk.id===top[0]) : null;
+  },[stats,books]);
+
+  const sorted=useMemo(()=>{
+    const arr=[...books];
+    arr.sort((a,b)=>{
+      let av=a[sortCol] || "", bv=b[sortCol] || "";
+      if(typeof av==="string") av=av.toLowerCase();
+      if(typeof bv==="string") bv=bv.toLowerCase();
+      if(av===bv) return 0;
+      return sortAsc ? (av>bv?1:-1) : (av<bv?1:-1);
+    });
+    return arr;
+  },[books,sortCol,sortAsc]);
+
+  const toggleSort=col=>{
+    if(sortCol===col) setSortAsc(a=>!a);
+    else { setSortCol(col); setSortAsc(true); }
+  };
+
+  const SortIcon=({col})=>{
+    if(sortCol!==col) return <span style={{color:C.border,marginLeft:3}}>↕</span>;
+    return <span style={{color:C.accent,marginLeft:3}}>{sortAsc ? "↑" : "↓"}</span>;
+  };
+
+  const KCard=({label,value,sub,col,large})=>(
+    <div style={{background:C.surf,border:`1px solid ${C.border}`,borderRadius:10,padding:"18px 18px",flex:1,minWidth:140}}>
+      <div style={{...lb,marginBottom:8}}>{label}</div>
+      <div style={{fontSize:large?18:30,fontWeight:700,color:col||C.ink,lineHeight:1.2}}>
+        {value!==null && value!==undefined && value!=="" ? value : "—"}
+      </div>
+      {sub && <div style={{fontSize:13,color:C.inkF,marginTop:5,lineHeight:1.4}}>{sub}</div>}
+    </div>
+  );
 
   return(
-    <div style={ov} onClick={e=>{ if(e.target===e.currentTarget) onClose(); }}>
-      <div style={{...mb,width:460}}>
-        <div style={{fontSize:22,fontWeight:600,color:C.ink,marginBottom:18}}>
-          {item ? "Editar item da wishlist" : "Adicionar à wishlist"}
+    <div style={{flex:1,overflowY:"auto",padding:"36px 40px"}}>
+      <div style={{marginBottom:28}}>
+        <h1 style={{fontSize:36,fontWeight:700,color:C.ink,lineHeight:1}}>Mynd Library</h1>
+        <p style={{fontSize:16,color:C.inkF,marginTop:8}}>Seu acervo pessoal.</p>
+      </div>
+
+      {lastBook && (
+        <div style={{background:`linear-gradient(135deg,${C.sb} 0%,#223858 100%)`,borderRadius:12,padding:"18px 22px",marginBottom:28,display:"flex",alignItems:"center",gap:18}}>
+          <div style={{width:5,minWidth:5,height:50,borderRadius:3,background:spineC(lastBook.id)}}/>
+          <div style={{flex:1,minWidth:0}}>
+            <div style={{fontSize:11,letterSpacing:"0.13em",textTransform:"uppercase",color:C.sbInkD,marginBottom:4,fontWeight:600}}>
+              Continuar leitura
+            </div>
+            <div style={{fontSize:19,fontWeight:600,color:C.sbInk,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>
+              {lastBook.title}
+            </div>
+            {lastBook.author && <div style={{fontSize:14,color:C.sbInkD,marginTop:2}}>{lastBook.author}</div>}
+          </div>
+          <button
+            onClick={onContinue}
+            style={{display:"flex",alignItems:"center",gap:8,background:"rgba(255,255,255,.1)",border:"1px solid rgba(255,255,255,.18)",borderRadius:8,padding:"10px 18px",cursor:"pointer",color:C.sbInk,fontSize:14,fontWeight:600,flexShrink:0,whiteSpace:"nowrap"}}
+          >
+            <Ico d={D.play} sz={14} col={C.sbInk}/> Retomar
+          </button>
+        </div>
+      )}
+
+      <div style={{display:"flex",gap:14,marginBottom:28,flexWrap:"wrap"}}>
+        <KCard label="Total de livros" value={books.length} col={C.accent}/>
+        <KCard label="Total de páginas" value={totalPages>0 ? totalPages.toLocaleString("pt-BR") : null}/>
+        <KCard label="Com conversas" value={withChats || null}/>
+        <KCard label="Livros com notas" value={withNotes || null}/>
+        {mostConsulted && <KCard label="Mais consultado" value={mostConsulted.title} sub={mostConsulted.author} col={C.gold} large/>}
+      </div>
+
+      {books.length > 0 && (
+        <div style={{background:C.surf,border:`1px solid ${C.border}`,borderRadius:10,padding:"22px 24px",marginBottom:28}}>
+          <div style={{fontSize:18,fontWeight:700,color:C.ink,marginBottom:16}}>Acervo</div>
+          <div style={{overflowX:"auto"}}>
+            <table style={{width:"100%",borderCollapse:"collapse",fontSize:14,tableLayout:"fixed"}}>
+              <thead>
+                <tr style={{borderBottom:`1px solid ${C.border}`}}>
+                  {[["title","Nome"],["author","Autor"],["category","Categoria"],["tags","Tags"],["addedAt","Data"]].map(([col,label])=>(
+                    <th
+                      key={col}
+                      onClick={col==="tags" ? undefined : ()=>toggleSort(col)}
+                      style={{
+                        textAlign:"left",
+                        padding:"8px 12px",
+                        cursor:col==="tags" ? "default" : "pointer",
+                        color:C.inkD,
+                        fontWeight:700,
+                        fontSize:12,
+                        letterSpacing:"0.05em",
+                        userSelect:"none",
+                        whiteSpace:"nowrap"
+                      }}
+                    >
+                      {label}{col!=="tags" && <SortIcon col={col}/>}
+                    </th>
+                  ))}
+                  <th style={{textAlign:"left",padding:"8px 12px",color:C.inkD,fontWeight:700,fontSize:12,letterSpacing:"0.05em",whiteSpace:"nowrap"}}>
+                    Ações
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {sorted.map(b=>(
+                  <tr key={b.id} style={{borderBottom:`1px solid ${C.borderL}`}}>
+                    <td style={{padding:"11px 12px",color:C.ink,fontWeight:600,verticalAlign:"top"}}>
+                      <div title={b.title}>{truncateText(b.title,42)}</div>
+                    </td>
+                    <td style={{padding:"11px 12px",color:C.inkD,verticalAlign:"top"}}>
+                      <div title={b.author || ""}>{b.author ? truncateText(b.author,28) : "—"}</div>
+                    </td>
+                    <td style={{padding:"11px 12px",verticalAlign:"top"}}>
+                      {b.category ? <span style={{...tp,fontSize:11}}>{b.category}</span> : "—"}
+                    </td>
+                    <td style={{padding:"11px 12px",color:C.inkF,verticalAlign:"top",minWidth:220}}>
+                      <div title={joinTags(b.tags||[])} style={{lineHeight:1.5}}>
+                        {truncateText(joinTags(b.tags||[]), 42)}
+                      </div>
+                    </td>
+                    <td style={{padding:"11px 12px",color:C.inkF,fontSize:13,verticalAlign:"top"}}>
+                      {b.addedAt ? new Date(b.addedAt).toLocaleDateString("pt-BR") : "—"}
+                    </td>
+                    <td style={{padding:"11px 12px",verticalAlign:"top"}}>
+                      <div style={{display:"flex",gap:7,alignItems:"center",flexWrap:"wrap"}}>
+                        <button onClick={()=>onOpenBook(b)} style={{...bI,padding:"5px 10px",fontSize:12,fontWeight:600,color:C.inkD}}>Abrir</button>
+                        <button onClick={()=>onEditBook(b)} style={{...bI,padding:"5px 9px"}}><Ico d={D.edit} sz={13}/></button>
+                        <button onClick={()=>onDeleteBook(b)} style={{...bI,padding:"5px 9px",color:C.red,borderColor:C.red+"44"}}><Ico d={D.trash} sz={13}/></button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      <div style={{background:C.surf,border:`1px solid ${C.border}`,borderRadius:10,padding:"22px 24px"}}>
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:16,gap:10,flexWrap:"wrap"}}>
+          <div style={{display:"flex",alignItems:"center",gap:9,flexWrap:"wrap"}}>
+            <Ico d={D.heart} sz={18} col={C.red}/>
+            <span style={{fontSize:18,fontWeight:700,color:C.ink}}>Wishlist</span>
+            <span style={{fontSize:14,color:C.inkF}}>| livros que quero adquirir</span>
+          </div>
+          <button onClick={onAddWish} style={{display:"flex",alignItems:"center",gap:6,background:C.accentBg,border:`1px solid ${C.accentBrd}`,borderRadius:6,padding:"7px 14px",cursor:"pointer",color:C.accent,fontSize:13,fontWeight:700}}>
+            <Ico d={D.plus} sz={14}/> Adicionar
+          </button>
         </div>
 
-        <div style={{marginBottom:14}}>
-          <div style={{...lb,marginBottom:6}}>Título *</div>
-          <input style={fi} value={d.title} onChange={e=>set("title",e.target.value)} placeholder="Título do livro" />
-        </div>
+        {wishlist.length===0 && <p style={{fontSize:14,color:C.inkF,fontStyle:"italic"}}>Nenhum livro na wishlist ainda.</p>}
 
-        <div style={{marginBottom:14}}>
-          <div style={{...lb,marginBottom:6}}>Autor</div>
-          <input style={fi} value={d.author} onChange={e=>set("author",e.target.value)} placeholder="Nome do autor" />
-        </div>
-
-        <div style={{marginBottom:22}}>
-          <div style={{...lb,marginBottom:6}}>Link de compra</div>
-          <input style={fi} value={d.link} onChange={e=>set("link",e.target.value)} placeholder="https://…" />
-        </div>
-
-        <div style={{display:"flex",gap:10,justifyContent:"flex-end"}}>
-          <button style={bG} onClick={onClose}>Cancelar</button>
-          <button style={bP(!d.title.trim())} disabled={!d.title.trim()} onClick={()=>onSave(d)}>Salvar</button>
+        <div style={{display:"flex",flexDirection:"column",gap:7}}>
+          {wishlist.map(w=>(
+            <div key={w.id} style={{display:"flex",alignItems:"center",gap:14,background:C.bg,border:`1px solid ${C.border}`,borderRadius:8,padding:"11px 16px"}}>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{fontSize:15,fontWeight:600,color:C.ink,lineHeight:1.3}}>{w.title}</div>
+                {w.author && <div style={{fontSize:13,color:C.inkF,marginTop:2}}>{w.author}</div>}
+              </div>
+              <div style={{display:"flex",gap:7,alignItems:"center",flexShrink:0,flexWrap:"wrap"}}>
+                {w.link && (
+                  <a
+                    href={w.link}
+                    target="_blank"
+                    rel="noopener"
+                    style={{display:"flex",alignItems:"center",gap:5,fontSize:12,fontWeight:600,color:C.accent,padding:"5px 12px",border:`1px solid ${C.accentBrd}`,borderRadius:5,textDecoration:"none",background:C.accentBg}}
+                  >
+                    <Ico d={D.link} sz={12}/> Comprar
+                  </a>
+                )}
+                <button onClick={()=>onEditWish(w)} style={{...bI,padding:"5px 9px"}}><Ico d={D.edit} sz={13}/></button>
+                <button onClick={()=>onDeleteWish(w.id)} style={{...bI,color:C.red,borderColor:C.red+"44",padding:"5px 9px"}}><Ico d={D.trash} sz={13}/></button>
+              </div>
+            </div>
+          ))}
         </div>
       </div>
     </div>
