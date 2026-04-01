@@ -20,6 +20,29 @@ body { color:#1a1614; }
 <script type="text/babel">
 const { useState, useEffect, useRef, useMemo, useCallback } = React;
 
+// ─── Constants ────────────────────────────────────────────────────────────────
+const CURRENT_SCHEMA_VERSION = 2;
+
+const DEF_CATS = [
+  "Ficção",
+  "Negócios",
+  "Marketing",
+  "Biografia",
+  "Geopolítica",
+  "Current Affairs",
+  "História",
+  "Autoajuda",
+  "Arte e Cultura"
+];
+
+const LEGACY_CATS = [
+  "Ficção","Não-Ficção","Negócios","Marketing",
+  "Ciência","História","Filosofia","Técnico","Outros",
+  "Ficcao","Negocios","Geopolitica","Historia","Auto-Ajuda"
+];
+
+const LEGACY_PROFILES = ["Eu", "Minha esposa"];
+
 // ─── Utils ────────────────────────────────────────────────────────────────────
 const uid = () => (
   window.crypto?.randomUUID
@@ -36,10 +59,56 @@ const noteFileName = (bookId, profileId) =>
 const chatFileName = (bookId, profileId) =>
   `${bookId}_chats_${safeProfileKey(profileId)}.json`;
 
+function trimStr(v){
+  return typeof v === "string" ? v.trim() : "";
+}
+
+function uniqueCaseInsensitive(arr=[]){
+  const out = [];
+  const seen = new Set();
+  for(const item of arr){
+    const clean = trimStr(item);
+    if(!clean) continue;
+    const key = clean.toLocaleLowerCase("pt-BR");
+    if(seen.has(key)) continue;
+    seen.add(key);
+    out.push(clean);
+  }
+  return out;
+}
+
+function normalizeTagValue(tag=""){
+  const clean = trimStr(tag).replace(/\s+/g, " ");
+  if(!clean) return "";
+  return clean.charAt(0).toUpperCase() + clean.slice(1);
+}
+
+function normalizeTags(tags){
+  if(!Array.isArray(tags)) return [];
+  return uniqueCaseInsensitive(tags.map(normalizeTagValue));
+}
+
+function truncateText(str="", max=70){
+  if(str.length <= max) return str;
+  return str.slice(0,max-1).trim() + "…";
+}
+
+function joinTags(tags=[]){
+  return tags.length ? tags.join(", ") : "—";
+}
+
+function debounce(fn, delay=180){
+  let t = null;
+  return (...args)=>{
+    clearTimeout(t);
+    t = setTimeout(()=>fn(...args), delay);
+  };
+}
+
 // ─── IndexedDB ────────────────────────────────────────────────────────────────
 function openIDB(){
   return new Promise((res,rej)=>{
-    const r=indexedDB.open("mynd_library_v2",1);
+    const r=indexedDB.open("mynd_library_v3",1);
     r.onupgradeneeded=e=>e.target.result.createObjectStore("s");
     r.onsuccess=e=>res(e.target.result);
     r.onerror=()=>rej(r.error);
@@ -90,42 +159,102 @@ async function listDirFiles(dir){
   return names;
 }
 
-// ─── Index ────────────────────────────────────────────────────────────────────
-const DEF_CATS = [
-  "Ficcao",
-  "Negocios",
-  "Marketing",
-  "Biografia",
-  "Geopolitica",
-  "Current Affairs",
-  "Historia",
-  "Auto-Ajuda",
-  "Arte e Cultura"
-];
+// ─── Normalization / Migration ────────────────────────────────────────────────
+function normalizeCategories(categories){
+  if(!Array.isArray(categories) || !categories.length) return [...DEF_CATS];
+  const cleaned = uniqueCaseInsensitive(categories);
+  const hasLegacy = cleaned.some(c => LEGACY_CATS.includes(c));
+  return hasLegacy ? [...DEF_CATS] : cleaned;
+}
 
+function normalizeProfiles(profiles){
+  if(!Array.isArray(profiles)) return [];
+  return uniqueCaseInsensitive(
+    profiles.filter(p => !LEGACY_PROFILES.includes(trimStr(p)))
+  );
+}
+
+function normalizeWishlist(wishlist){
+  if(!Array.isArray(wishlist)) return [];
+  return wishlist.map(item=>({
+    id: item?.id || uid(),
+    title: trimStr(item?.title),
+    author: trimStr(item?.author),
+    link: trimStr(item?.link),
+    addedAt: item?.addedAt || new Date().toISOString()
+  })).filter(item=>item.title);
+}
+
+function normalizeBooks(books){
+  if(!Array.isArray(books)) return [];
+  return books.map(book=>({
+    id: book?.id || uid(),
+    title: trimStr(book?.title),
+    author: trimStr(book?.author),
+    category: trimStr(book?.category),
+    tags: normalizeTags(book?.tags),
+    pages: Number(book?.pages) || 0,
+    summary: trimStr(book?.summary),
+    addedAt: book?.addedAt || new Date().toISOString()
+  })).filter(book=>book.title);
+}
+
+function migrateIndexData(raw){
+  return {
+    schemaVersion: CURRENT_SCHEMA_VERSION,
+    books: normalizeBooks(raw?.books),
+    categories: normalizeCategories(raw?.categories),
+    wishlist: normalizeWishlist(raw?.wishlist),
+    profiles: normalizeProfiles(raw?.profiles)
+  };
+}
+
+// ─── Index ────────────────────────────────────────────────────────────────────
 async function loadIdx(dir){
   const txt = await rf(dir,"index.json");
+
   if(!txt){
-    return { books:[], categories:[...DEF_CATS], wishlist:[], profiles:[] };
-  }
-  try{
-    const d = JSON.parse(txt);
-    const categories = Array.isArray(d.categories) && d.categories.length
-      ? d.categories
-      : [...DEF_CATS];
-    const profiles = Array.isArray(d.profiles) ? d.profiles.filter(Boolean) : [];
     return {
-      books: d.books || [],
-      categories,
-      wishlist: d.wishlist || [],
-      profiles
+      schemaVersion: CURRENT_SCHEMA_VERSION,
+      books: [],
+      categories: [...DEF_CATS],
+      wishlist: [],
+      profiles: []
     };
+  }
+
+  try{
+    const parsed = JSON.parse(txt);
+    const migrated = migrateIndexData(parsed);
+
+    const original = JSON.stringify(parsed);
+    const normalized = JSON.stringify(migrated);
+    if(original !== normalized){
+      await saveIdx(dir, migrated);
+    }
+
+    return migrated;
   }catch{
-    return { books:[], categories:[...DEF_CATS], wishlist:[], profiles:[] };
+    const fallback = {
+      schemaVersion: CURRENT_SCHEMA_VERSION,
+      books: [],
+      categories: [...DEF_CATS],
+      wishlist: [],
+      profiles: []
+    };
+    await saveIdx(dir, fallback);
+    return fallback;
   }
 }
+
 async function saveIdx(dir,data){
-  await wf(dir,"index.json",JSON.stringify(data,null,2));
+  await wf(dir,"index.json",JSON.stringify({
+    schemaVersion: CURRENT_SCHEMA_VERSION,
+    books: normalizeBooks(data?.books),
+    categories: normalizeCategories(data?.categories),
+    wishlist: normalizeWishlist(data?.wishlist),
+    profiles: normalizeProfiles(data?.profiles)
+  },null,2));
 }
 
 // ─── Chats ────────────────────────────────────────────────────────────────────
@@ -133,7 +262,8 @@ async function loadChats(dir,bookId,profileId){
   const txt=await rf(dir,chatFileName(bookId,profileId));
   if(!txt) return [];
   try{
-    return JSON.parse(txt);
+    const parsed = JSON.parse(txt);
+    return Array.isArray(parsed) ? parsed : [];
   }catch{
     return [];
   }
@@ -179,13 +309,20 @@ async function loadStats(dir){
   const txt=await rf(dir,"stats.json");
   if(!txt) return { consultations:{} };
   try{
-    return JSON.parse(txt);
+    const parsed = JSON.parse(txt);
+    return {
+      consultations: parsed?.consultations && typeof parsed.consultations === "object"
+        ? parsed.consultations
+        : {}
+    };
   }catch{
     return { consultations:{} };
   }
 }
 async function saveStats(dir,stats){
-  await wf(dir,"stats.json",JSON.stringify(stats,null,2));
+  await wf(dir,"stats.json",JSON.stringify({
+    consultations: stats?.consultations || {}
+  },null,2));
 }
 
 // ─── PDF.js ───────────────────────────────────────────────────────────────────
@@ -211,8 +348,12 @@ async function extractPdf(file){
   const pdf=await window.pdfjsLib.getDocument({ data: await file.arrayBuffer() }).promise;
   let t="";
   for(let i=1;i<=pdf.numPages;i++){
-    const c=await (await pdf.getPage(i)).getTextContent();
+    const page = await pdf.getPage(i);
+    const c = await page.getTextContent();
     t += c.items.map(x=>x.str).join(" ") + "\n";
+    if(i % 2 === 0){
+      await new Promise(r=>setTimeout(r,0));
+    }
     if(t.length > 130000) break;
   }
   return { text:t.slice(0,130000), pages:pdf.numPages };
@@ -275,8 +416,7 @@ const C = {
   sbInk:"#ffffff", sbInkD:"rgba(255,255,255,.82)", sbInkF:"rgba(255,255,255,.62)",
 
   accent:"#2d6be4", accentBg:"rgba(45,107,228,.08)", accentBrd:"rgba(45,107,228,.25)",
-  gold:"#7a5a1a", goldM:"#9a7020", goldBg:"rgba(122,90,26,.08)", goldBrd:"rgba(122,90,26,.25)",
-  blue:"#1e4a72", blueBg:"rgba(30,74,114,.07)", blueBrd:"rgba(30,74,114,.22)",
+  gold:"#7a5a1a", goldBg:"rgba(122,90,26,.08)", goldBrd:"rgba(122,90,26,.25)",
   green:"#1e5c2e", red:"#7a1e1e",
 };
 
@@ -307,16 +447,8 @@ const D = {
   dl:"M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3",
   home:"M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2zM9 22V12h6v10",
   heart:"M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z",
-  link:"M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71",
-  list:"M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01",
-  chat:"M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z",
-  user:"M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2M12 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8z",
-  chevDown:"M6 9l6 6 6-6",
-  play:"M5 3l14 9-14 9V3z",
-  save:"M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2zM17 21v-8H7v8M7 3v5h8",
-};
-
-// ─── Base styles ──────────────────────────────────────────────────────────────
+  link:"M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71M14 11a5 5 0 0
+  // Base styles
 const ov = {
   position:"fixed", inset:0, background:"rgba(10,20,40,.55)",
   display:"flex", alignItems:"center", justifyContent:"center",
@@ -368,28 +500,23 @@ const sbLb = {
   fontSize:10, letterSpacing:"0.12em", textTransform:"uppercase", color:C.sbInkF, fontWeight:600
 };
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-function truncateText(str="", max=70){
-  if(str.length <= max) return str;
-  return str.slice(0,max-1).trim() + "…";
-}
-
-function joinTags(tags=[]){
-  return tags.length ? tags.join(", ") : "—";
-}
-
-// ─── TagInput ─────────────────────────────────────────────────────────────────
+// TagInput
 function TagInput({tags,onChange}){
   const [draft,setDraft]=useState("");
   const ref=useRef();
 
   const commit=useCallback(()=>{
-    const t=draft.trim();
-    if(!t || tags.includes(t)){
+    const normalized = normalizeTagValue(draft);
+    if(!normalized){
       setDraft("");
       return;
     }
-    onChange([...tags,t]);
+    const existing = (tags || []).some(t => t.toLocaleLowerCase("pt-BR") === normalized.toLocaleLowerCase("pt-BR"));
+    if(existing){
+      setDraft("");
+      return;
+    }
+    onChange(normalizeTags([...(tags || []), normalized]));
     setDraft("");
     setTimeout(()=>ref.current?.focus(),0);
   },[draft,tags,onChange]);
@@ -403,7 +530,10 @@ function TagInput({tags,onChange}){
               {t}
               <button
                 type="button"
-                onClick={e=>{e.preventDefault(); onChange(tags.filter(x=>x!==t));}}
+                onClick={e=>{
+                  e.preventDefault();
+                  onChange(tags.filter(x=>x!==t));
+                }}
                 style={{background:"none",border:"none",cursor:"pointer",color:C.accent,padding:0,lineHeight:1,display:"flex"}}
               >
                 <Ico d={D.close} sz={11}/>
@@ -441,9 +571,16 @@ function TagInput({tags,onChange}){
   );
 }
 
-// ─── BookModal ────────────────────────────────────────────────────────────────
+// BookModal
 function BookModal({mode,initial,categories,onSave,onClose,uploading,prog,err}){
-  const [d,setD]=useState({ title:"", author:"", category:categories[0]||"", tags:[], ...initial });
+  const [d,setD]=useState({
+    title:"",
+    author:"",
+    category:categories[0]||"",
+    tags:[],
+    ...initial
+  });
+
   const set=(k,v)=>setD(p=>({...p,[k]:v}));
 
   return(
@@ -493,7 +630,7 @@ function BookModal({mode,initial,categories,onSave,onClose,uploading,prog,err}){
           <button
             style={bP(!d.title.trim() || uploading)}
             disabled={!d.title.trim() || uploading}
-            onClick={()=>onSave(d)}
+            onClick={()=>onSave({...d, tags: normalizeTags(d.tags)})}
           >
             {uploading ? "Processando…" : mode==="add" ? "Adicionar" : "Salvar"}
           </button>
@@ -503,19 +640,17 @@ function BookModal({mode,initial,categories,onSave,onClose,uploading,prog,err}){
   );
 }
 
-// ─── Category Modal ───────────────────────────────────────────────────────────
+// Category modal
 function CatModal({categories,onSave,onClose}){
   const [cats,setCats]=useState([...categories]);
   const [nv,setNv]=useState("");
   const [ed,setEd]=useState(null);
 
   const add=()=>{
-    const v=nv.trim();
-    if(!v || cats.includes(v)){
-      setNv("");
-      return;
-    }
-    setCats(p=>[...p,v]);
+    const v=trimStr(nv);
+    if(!v) return;
+    const next = uniqueCaseInsensitive([...cats, v]);
+    setCats(next);
     setNv("");
   };
 
@@ -535,8 +670,12 @@ function CatModal({categories,onSave,onClose}){
                     onChange={e=>setEd(p=>({...p,v:e.target.value}))}
                     onKeyDown={e=>{
                       if(e.key==="Enter"){
-                        const val=ed.v.trim();
-                        if(val) setCats(p=>p.map((x,j)=>j===i?val:x));
+                        const val=trimStr(ed.v);
+                        if(val){
+                          const updated=[...cats];
+                          updated[i]=val;
+                          setCats(uniqueCaseInsensitive(updated));
+                        }
                         setEd(null);
                       }
                       if(e.key==="Escape") setEd(null);
@@ -546,8 +685,12 @@ function CatModal({categories,onSave,onClose}){
                   <button
                     style={{...bI,borderColor:C.accentBrd,color:C.accent}}
                     onClick={()=>{
-                      const val=ed.v.trim();
-                      if(val) setCats(p=>p.map((x,j)=>j===i?val:x));
+                      const val=trimStr(ed.v);
+                      if(val){
+                        const updated=[...cats];
+                        updated[i]=val;
+                        setCats(uniqueCaseInsensitive(updated));
+                      }
                       setEd(null);
                     }}
                   >
@@ -583,14 +726,14 @@ function CatModal({categories,onSave,onClose}){
 
         <div style={{display:"flex",gap:10,justifyContent:"flex-end"}}>
           <button style={bG} onClick={onClose}>Cancelar</button>
-          <button style={bP(false)} onClick={()=>onSave(cats)}>Salvar</button>
+          <button style={bP(false)} onClick={()=>onSave(normalizeCategories(cats))}>Salvar</button>
         </div>
       </div>
     </div>
   );
 }
 
-// ─── Wishlist Modal ───────────────────────────────────────────────────────────
+// Wishlist modal
 function WishModal({item,onSave,onClose}){
   const [d,setD]=useState({ title:"", author:"", link:"", ...(item||{}) });
   const set=(k,v)=>setD(p=>({...p,[k]:v}));
@@ -625,16 +768,17 @@ function WishModal({item,onSave,onClose}){
     </div>
   );
 }
-// ─── Note Card ────────────────────────────────────────────────────────────────
+
+// Note Card
 function NoteCard({note,onEdit,onDelete,readonly=false,ownerName=""}){
   return(
-    <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:8,padding:"12px 14px",marginBottom:9}}>
+    <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:8,padding:"10px 12px",marginBottom:8}}>
       {ownerName && (
-        <div style={{...lb,color:C.gold,marginBottom:7,fontSize:10}}>
+        <div style={{...lb,color:C.gold,marginBottom:6,fontSize:10}}>
           {ownerName}
         </div>
       )}
-      <div style={{whiteSpace:"pre-wrap",fontSize:14,color:C.inkD,lineHeight:1.7}}>
+      <div style={{whiteSpace:"pre-wrap",fontSize:14,color:C.inkD,lineHeight:1.65}}>
         {note.text}
       </div>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginTop:8}}>
@@ -651,8 +795,7 @@ function NoteCard({note,onEdit,onDelete,readonly=false,ownerName=""}){
     </div>
   );
 }
-
-// ─── Notes Panel ──────────────────────────────────────────────────────────────
+// Notes Panel
 function NotesPanel({dirHandle,bookId,profileId,otherProfiles,onNotesPresenceChange}){
   const [myNotes,setMyNotes]=useState([]);
   const [saved,setSaved]=useState(true);
@@ -685,7 +828,13 @@ function NotesPanel({dirHandle,bookId,profileId,otherProfiles,onNotesPresenceCha
       setOtherNotes(result);
     };
     loadOthers();
-  },[viewMode,bookId,otherProfiles,dirHandle]);
+  },[bookId,otherProfiles,dirHandle]);
+
+  useEffect(()=>{
+    setViewMode(profileId);
+    setDraft("");
+    setEditingId(null);
+  },[bookId, profileId]);
 
   const saveList=async(next)=>{
     setMyNotes(next);
@@ -733,17 +882,17 @@ function NotesPanel({dirHandle,bookId,profileId,otherProfiles,onNotesPresenceCha
 
   const renderOwnSection = () => (
     <div>
-      <div style={{background:C.surf,border:`1px solid ${C.border}`,borderRadius:9,padding:"12px 12px 10px",marginBottom:12}}>
+      <div style={{background:C.surf,border:`1px solid ${C.border}`,borderRadius:9,padding:"10px 10px 9px",marginBottom:10}}>
         <textarea
           value={draft}
           onChange={e=>setDraft(e.target.value)}
-          placeholder="Escreva uma nota e salve separadamente"
+          placeholder="Escreva uma nota"
           style={{
-            ...fi, resize:"vertical", minHeight:90, lineHeight:1.7, fontSize:14,
+            ...fi, resize:"vertical", minHeight:70, lineHeight:1.65, fontSize:14,
             border:"none", background:"transparent", padding:0
           }}
         />
-        <div style={{display:"flex",justifyContent:"flex-end",gap:8,marginTop:10}}>
+        <div style={{display:"flex",justifyContent:"flex-end",gap:8,marginTop:8}}>
           {editingId && <button onClick={()=>{setEditingId(null); setDraft("");}} style={bG}>Cancelar</button>}
           <button onClick={addOrUpdate} style={bP(!draft.trim())} disabled={!draft.trim()}>
             <Ico d={editingId?D.check:D.save} sz={15} col={draft.trim()?C.surf:"#999"} style={{marginRight:8}}/>
@@ -753,7 +902,7 @@ function NotesPanel({dirHandle,bookId,profileId,otherProfiles,onNotesPresenceCha
       </div>
 
       {myNotes.length===0
-        ? <p style={{fontSize:14,color:C.inkF,fontStyle:"italic",padding:"2px 0 8px"}}>Nenhuma nota salva ainda.</p>
+        ? <p style={{fontSize:14,color:C.inkF,fontStyle:"italic",padding:"2px 0 6px"}}>Nenhuma nota salva ainda.</p>
         : myNotes.map(note=>(
             <NoteCard
               key={note.id}
@@ -770,7 +919,7 @@ function NotesPanel({dirHandle,bookId,profileId,otherProfiles,onNotesPresenceCha
     <div style={{marginBottom:10}}>
       <div style={{...lb,marginBottom:6,color:C.gold,fontSize:10}}>{name}</div>
       {notes.length === 0
-        ? <p style={{fontSize:14,color:C.inkF,fontStyle:"italic",padding:"2px 0 8px"}}>Nenhuma nota.</p>
+        ? <p style={{fontSize:14,color:C.inkF,fontStyle:"italic",padding:"2px 0 6px"}}>Nenhuma nota.</p>
         : notes.map(note=>(
             <NoteCard key={note.id} note={note} readonly ownerName={name} />
           ))
@@ -779,8 +928,8 @@ function NotesPanel({dirHandle,bookId,profileId,otherProfiles,onNotesPresenceCha
   );
 
   return(
-    <div style={{padding:"12px 28px 0"}}>
-      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8,gap:10,flexWrap:"wrap"}}>
+    <div style={{padding:"10px 28px 0"}}>
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:6,gap:10,flexWrap:"wrap"}}>
         <div style={{...lb,display:"flex",alignItems:"center",gap:6}}>
           <Ico d={D.note} sz={11}/> Notas
         </div>
@@ -799,7 +948,7 @@ function NotesPanel({dirHandle,bookId,profileId,otherProfiles,onNotesPresenceCha
                   background:viewMode===label?C.accentBg:"none",
                   cursor:"pointer",
                   color:viewMode===label?C.accent:C.inkF,
-                  fontWeight:500
+                  fontWeight:label==="Todas" ? 700 : 500
                 }}
               >
                 {label}
@@ -820,10 +969,10 @@ function NotesPanel({dirHandle,bookId,profileId,otherProfiles,onNotesPresenceCha
 
       {viewMode === "Todas" && (
         <div>
-          <div style={{marginBottom:12}}>
+          <div style={{marginBottom:10}}>
             <div style={{...lb,marginBottom:6,color:C.accent,fontSize:10}}>{profileId}</div>
             {myNotes.length===0
-              ? <p style={{fontSize:14,color:C.inkF,fontStyle:"italic",padding:"2px 0 8px"}}>Nenhuma nota.</p>
+              ? <p style={{fontSize:14,color:C.inkF,fontStyle:"italic",padding:"2px 0 6px"}}>Nenhuma nota.</p>
               : myNotes.map(note=>(
                   <NoteCard
                     key={note.id}
@@ -847,7 +996,7 @@ function NotesPanel({dirHandle,bookId,profileId,otherProfiles,onNotesPresenceCha
   );
 }
 
-// ─── Chat Area ────────────────────────────────────────────────────────────────
+// ChatArea
 function ChatArea({messages,loading,onSend,placeholder,emptyNode,onExport}){
   const [input,setInput]=useState("");
   const endRef=useRef();
@@ -856,6 +1005,10 @@ function ChatArea({messages,loading,onSend,placeholder,emptyNode,onExport}){
   useEffect(()=>{
     endRef.current?.scrollIntoView({behavior:"smooth"});
   },[messages,loading]);
+
+  useEffect(()=>{
+    setInput("");
+  },[placeholder]);
 
   const send=()=>{
     const t=input.trim();
@@ -972,12 +1125,16 @@ function ChatArea({messages,loading,onSend,placeholder,emptyNode,onExport}){
   );
 }
 
-// ─── Chat History ─────────────────────────────────────────────────────────────
+// ChatHistory
 function ChatHistory({sessions,otherSessions,activeId,onSelect,onNew,otherProfileNames=[]}){
   const [tab,setTab]=useState("mine");
   const allOther=Object.entries(otherSessions || {}).flatMap(([p,ss])=>ss.map(s=>({...s,_profile:p})));
   const hasOther=allOther.length>0;
   const otherTabLabel=otherProfileNames.length===1 ? otherProfileNames[0] : "Outros perfis";
+
+  useEffect(()=>{
+    setTab("mine");
+  },[sessions, otherSessions]);
 
   if(!sessions.length && !hasOther) return null;
 
@@ -1058,36 +1215,39 @@ function ChatHistory({sessions,otherSessions,activeId,onSelect,onNew,otherProfil
     </div>
   );
 }
-
-// ─── Home Page ────────────────────────────────────────────────────────────────
+  // HomePage
 function HomePage({
-  books,wishlist,onAddWish,onEditWish,onDeleteWish,lastBook,onContinue,
+  visibleBooks, allBooks, wishlist,onAddWish,onEditWish,onDeleteWish,lastBook,onContinue,
   stats,onOpenBook,onEditBook,onDeleteBook
 }){
   const [sortCol,setSortCol]=useState("addedAt");
   const [sortAsc,setSortAsc]=useState(false);
 
-  const totalPages=useMemo(()=>books.reduce((s,b)=>s+(b.pages||0),0),[books]);
-  const withChats=useMemo(()=>books.filter(b=>b._hasChats).length,[books]);
-  const withNotes=useMemo(()=>books.filter(b=>b._hasNotes).length,[books]);
+  const totalPages=useMemo(()=>allBooks.reduce((s,b)=>s+(b.pages||0),0),[allBooks]);
+  const withChats=useMemo(()=>allBooks.filter(b=>b._hasChats).length,[allBooks]);
+  const withNotes=useMemo(()=>allBooks.filter(b=>b._hasNotes).length,[allBooks]);
 
   const mostConsulted=useMemo(()=>{
     const c=stats?.consultations || {};
     const top=Object.entries(c).sort((a,b)=>b[1]-a[1])[0];
-    return top ? books.find(bk=>bk.id===top[0]) : null;
-  },[stats,books]);
+    return top ? allBooks.find(bk=>bk.id===top[0]) : null;
+  },[stats,allBooks]);
 
   const sorted=useMemo(()=>{
-    const arr=[...books];
+    const arr=[...visibleBooks];
     arr.sort((a,b)=>{
       let av=a[sortCol] || "", bv=b[sortCol] || "";
+      if(sortCol === "tags"){
+        av = joinTags(a.tags || []);
+        bv = joinTags(b.tags || []);
+      }
       if(typeof av==="string") av=av.toLowerCase();
       if(typeof bv==="string") bv=bv.toLowerCase();
       if(av===bv) return 0;
       return sortAsc ? (av>bv?1:-1) : (av<bv?1:-1);
     });
     return arr;
-  },[books,sortCol,sortAsc]);
+  },[visibleBooks,sortCol,sortAsc]);
 
   const toggleSort=col=>{
     if(sortCol===col) setSortAsc(a=>!a);
@@ -1138,14 +1298,14 @@ function HomePage({
       )}
 
       <div style={{display:"flex",gap:14,marginBottom:28,flexWrap:"wrap"}}>
-        <KCard label="Total de livros" value={books.length} col={C.accent}/>
+        <KCard label="Total de livros" value={allBooks.length} col={C.accent}/>
         <KCard label="Total de páginas" value={totalPages>0 ? totalPages.toLocaleString("pt-BR") : null}/>
         <KCard label="Com conversas" value={withChats || null}/>
         <KCard label="Livros com notas" value={withNotes || null}/>
         {mostConsulted && <KCard label="Mais consultado" value={mostConsulted.title} sub={mostConsulted.author} col={C.gold} large/>}
       </div>
 
-      {books.length > 0 && (
+      {allBooks.length > 0 && (
         <div style={{background:C.surf,border:`1px solid ${C.border}`,borderRadius:10,padding:"22px 24px",marginBottom:28}}>
           <div style={{fontSize:18,fontWeight:700,color:C.ink,marginBottom:16}}>Acervo</div>
           <div style={{overflowX:"auto"}}>
@@ -1155,11 +1315,11 @@ function HomePage({
                   {[["title","Nome"],["author","Autor"],["category","Categoria"],["tags","Tags"],["addedAt","Data"]].map(([col,label])=>(
                     <th
                       key={col}
-                      onClick={col==="tags" ? undefined : ()=>toggleSort(col)}
+                      onClick={()=>toggleSort(col)}
                       style={{
                         textAlign:"left",
                         padding:"8px 12px",
-                        cursor:col==="tags" ? "default" : "pointer",
+                        cursor:"pointer",
                         color:C.inkD,
                         fontWeight:700,
                         fontSize:12,
@@ -1168,7 +1328,7 @@ function HomePage({
                         whiteSpace:"nowrap"
                       }}
                     >
-                      {label}{col!=="tags" && <SortIcon col={col}/>}
+                      {label}<SortIcon col={col}/>
                     </th>
                   ))}
                   <th style={{textAlign:"left",padding:"8px 12px",color:C.inkD,fontWeight:700,fontSize:12,letterSpacing:"0.05em",whiteSpace:"nowrap"}}>
@@ -1205,6 +1365,13 @@ function HomePage({
                     </td>
                   </tr>
                 ))}
+                {sorted.length===0 && (
+                  <tr>
+                    <td colSpan="6" style={{padding:"16px 12px",color:C.inkF,fontStyle:"italic"}}>
+                      Nenhum livro corresponde aos filtros atuais.
+                    </td>
+                  </tr>
+                )}
               </tbody>
             </table>
           </div>
@@ -1253,7 +1420,8 @@ function HomePage({
     </div>
   );
 }
-// ─── Setup ────────────────────────────────────────────────────────────────────
+
+// Setup
 function Setup({onReady}){
   const [apiKey,setKey]=useState(()=>localStorage.getItem("mynd_apikey") || "");
   const [dir,setDir]=useState(null);
@@ -1277,7 +1445,8 @@ function Setup({onReady}){
     if(!apiKey.trim() || !dir || !name) return;
 
     const idx=await loadIdx(dir);
-    const profiles=Array.from(new Set([...(idx.profiles||[]), name]));
+    const profiles=uniqueCaseInsensitive([...(idx.profiles||[]), name]);
+
     await saveIdx(dir,{
       books:idx.books||[],
       categories:idx.categories||[...DEF_CATS],
@@ -1355,7 +1524,7 @@ function Setup({onReady}){
   );
 }
 
-// ─── Profile Switcher ─────────────────────────────────────────────────────────
+// ProfileSwitcher
 function ProfileSwitcher({userName,onSwitch,profiles=[]}){
   const [open,setOpen]=useState(false);
   const [custom,setCustom]=useState("");
@@ -1407,38 +1576,262 @@ function ProfileSwitcher({userName,onSwitch,profiles=[]}){
   );
 }
 
-// ─── Library ──────────────────────────────────────────────────────────────────
-function Library({dirHandle,apiKey,userName:initUser}){
-  const [books,setBooks]                = useState([]);
-  const [cats,setCats]                  = useState([...DEF_CATS]);
-  const [profiles,setProfiles]          = useState([]);
-  const [wishlist,setWishlist]          = useState([]);
-  const [stats,setStats]                = useState({consultations:{}});
-  const [screen,setScreen]              = useState("home");
-  const [selBook,setSelBook]            = useState(null);
-  const [bookText,setBookText]          = useState("");
-  const [bookMsgs,setBookMsgs]          = useState([]);
-  const [chatSessions,setChatSessions]  = useState([]);
-  const [otherSessions,setOtherSessions]= useState({});
-  const [activeChatId,setActiveChatId]  = useState(null);
-  const [globalMsgs,setGlobalMsgs]      = useState([]);
-  const [globalTexts,setGlobalTexts]    = useState(null);
-  const [chatLoading,setChatLoading]    = useState(false);
-  const [globalLoading,setGlobalLoading]= useState(false);
+// Sidebar
+function Sidebar({
+  dirHandle,
+  userName,
+  profiles,
+  switchProfile,
+  screen,
+  setScreen,
+  openGlobal,
+  searchDraft,
+  setSearchDraft,
+  tagDraft,
+  setTagDraft,
+  allTags,
+  selectedCategory,
+  setSelectedCategory,
+  cats,
+  catCounts,
+  books,
+  filteredBooks,
+  selBook,
+  openBook,
+  clearFilters,
+  hasActiveFilter,
+  setModal,
+  fileRef,
+  handleFilePick
+}){
+  return(
+    <aside style={{width:285,minWidth:285,background:C.sb,borderRight:`1px solid ${C.sbBorder}`,display:"flex",flexDirection:"column",overflowY:"auto"}}>
+      <div style={{padding:"16px 14px 12px",borderBottom:`1px solid ${C.sbBorder}`}}>
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:4,gap:8}}>
+          <div style={{fontSize:19,fontWeight:700,color:C.sbInk,display:"flex",alignItems:"center",gap:8}}>
+            <Ico d={D.book} sz={17} col={C.sbInk}/> Mynd Library
+          </div>
+          <ProfileSwitcher userName={userName} onSwitch={switchProfile} profiles={profiles}/>
+        </div>
+        <div style={{...sbLb,marginTop:3}}>{dirHandle.name}</div>
+      </div>
 
-  const [searchQ,setSearchQ]            = useState("");
-  const [tagQuery,setTagQuery]          = useState("");
+      <div style={{padding:"10px 10px 8px",borderBottom:`1px solid ${C.sbBorder}`}}>
+        {[
+          {id:"home",label:"Página inicial",icon:D.home,fn:()=>setScreen("home")},
+          {id:"global",label:"Pesquisar na biblioteca",icon:D.globe,fn:openGlobal},
+        ].map(({id,label,icon,fn})=>(
+          <button
+            key={id}
+            onClick={fn}
+            style={{
+              width:"100%",display:"flex",alignItems:"center",gap:8,padding:"8px 10px",marginBottom:3,
+              borderRadius:7,cursor:"pointer",border:"none",textAlign:"left",fontSize:13,
+              fontWeight:screen===id?700:500,background:screen===id?C.sbSurf:"none",
+              color:screen===id?C.sbInk:C.sbInkD
+            }}
+          >
+            <Ico d={icon} sz={15} col={C.sbInk}/>{label}
+          </button>
+        ))}
+      </div>
+
+      <div style={{padding:"10px 11px 8px",borderBottom:`1px solid ${C.sbBorder}`}}>
+        <div style={{...sbLb,marginBottom:7,display:"flex",alignItems:"center",gap:6}}>
+          <Ico d={D.search} sz={10}/> Pesquisar um livro
+        </div>
+
+        <div style={{display:"flex",alignItems:"center",gap:7,background:"rgba(0,0,0,.2)",border:`1px solid ${searchDraft.trim()?"rgba(255,255,255,.45)":C.sbBorder}`,borderRadius:6,padding:"7px 10px",marginBottom:10}}>
+          <Ico d={D.search} sz={13} col={C.sbInk}/>
+          <input
+            value={searchDraft}
+            onChange={e=>setSearchDraft(e.target.value)}
+            placeholder="Título ou autor…"
+            style={{flex:1,background:"none",border:"none",outline:"none",color:C.sbInk,fontSize:13,minWidth:0}}
+          />
+          {searchDraft && (
+            <button onClick={()=>setSearchDraft("")} style={{background:"none",border:"none",cursor:"pointer",color:C.sbInk,display:"flex"}}>
+              <Ico d={D.close} sz={12}/>
+            </button>
+          )}
+        </div>
+
+        <div style={{...sbLb,marginBottom:6,display:"flex",alignItems:"center",gap:4}}>
+          <Ico d={D.tag} sz={10}/> Pesquisa por tag
+        </div>
+
+        <div style={{display:"flex",alignItems:"center",gap:7,background:"rgba(0,0,0,.2)",border:`1px solid ${tagDraft.trim()?"rgba(255,255,255,.45)":C.sbBorder}`,borderRadius:6,padding:"7px 10px",marginBottom:8}}>
+          <Ico d={D.tag} sz={13} col={C.sbInk}/>
+          <input
+            value={tagDraft}
+            onChange={e=>setTagDraft(e.target.value)}
+            placeholder="Digite uma tag…"
+            style={{flex:1,background:"none",border:"none",outline:"none",color:C.sbInk,fontSize:13,minWidth:0}}
+          />
+          {tagDraft && (
+            <button onClick={()=>setTagDraft("")} style={{background:"none",border:"none",cursor:"pointer",color:C.sbInk,display:"flex"}}>
+              <Ico d={D.close} sz={12}/>
+            </button>
+          )}
+        </div>
+
+        {allTags.length > 0 && (
+          <div style={{marginBottom:10}}>
+            <div style={{...sbLb,marginBottom:6,display:"flex",alignItems:"center",gap:4}}>
+              <Ico d={D.tag} sz={10}/> Tags disponíveis
+            </div>
+            <div style={{display:"flex",flexWrap:"wrap",gap:5,maxHeight:90,overflowY:"auto"}}>
+              {allTags.map(t=>(
+                <button
+                  key={t}
+                  onClick={()=>setTagDraft(t)}
+                  style={{
+                    fontSize:11,padding:"2px 8px",borderRadius:10,cursor:"pointer",
+                    border:`1px solid ${tagDraft.toLowerCase()===t.toLowerCase()?"rgba(255,255,255,.75)":"rgba(255,255,255,.28)"}`,
+                    background:tagDraft.toLowerCase()===t.toLowerCase()?"rgba(255,255,255,.18)":"rgba(255,255,255,.08)",
+                    color:C.sbInk,fontWeight:600
+                  }}
+                >
+                  {t}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
+        <div>
+          <div style={{...sbLb,marginBottom:6,display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+            <span style={{display:"flex",alignItems:"center",gap:4}}><Ico d={D.list} sz={10}/> Categorias</span>
+            <button onClick={()=>setModal({type:"cats"})} title="Gerenciar categorias" style={{background:"none",border:"none",cursor:"pointer",color:C.sbInk,display:"flex",padding:2}}>
+              <Ico d={D.edit} sz={11}/>
+            </button>
+          </div>
+
+          <div style={{display:"flex",flexDirection:"column",gap:1}}>
+            {["Todas", ...cats].map(cat=>{
+              const active = (cat==="Todas" && !selectedCategory) || (cat!=="Todas" && selectedCategory===cat);
+              return (
+                <button
+                  key={cat}
+                  onClick={()=>{
+                    if(cat==="Todas"){
+                      setSelectedCategory("");
+                      return;
+                    }
+                    setSelectedCategory(cat);
+                  }}
+                  style={{
+                    display:"flex",alignItems:"center",justifyContent:"space-between",
+                    padding:"5px 9px",borderRadius:6,cursor:"pointer",border:"none",
+                    background:active ? C.sbSurf : "none",
+                    color:active ? C.sbInk : C.sbInkD,
+                    fontSize:12,textAlign:"left",fontWeight:cat==="Todas" ? 700 : 500
+                  }}
+                >
+                  <span>{cat}</span>
+                  <span style={{fontSize:11,color:C.sbInkF}}>
+                    {cat==="Todas" ? books.length : (catCounts[cat] || 0)}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {hasActiveFilter && (
+          <div style={{marginTop:8,display:"flex",alignItems:"center",gap:6,background:"rgba(255,255,255,.1)",border:"1px solid rgba(255,255,255,.18)",borderRadius:6,padding:"5px 10px"}}>
+            <span style={{fontSize:12,color:C.sbInk,flex:1}}>
+              {[searchDraft.trim() && `Busca: ${searchDraft}`, tagDraft.trim() && `Tag: ${tagDraft}`, selectedCategory && `Categoria: ${selectedCategory}`].filter(Boolean).join(" | ")}
+            </span>
+            <button onClick={clearFilters} style={{background:"none",border:"none",cursor:"pointer",color:C.sbInk,display:"flex"}}>
+              <Ico d={D.close} sz={12}/>
+            </button>
+          </div>
+        )}
+      </div>
+
+      <div style={{padding:"8px 9px 12px"}}>
+        {filteredBooks.map(b=>(
+          <div
+            key={b.id}
+            onClick={()=>openBook(b)}
+            style={{
+              display:"flex",alignItems:"flex-start",gap:8,padding:"8px 8px",borderRadius:7,cursor:"pointer",
+              border:`1px solid ${selBook?.id===b.id && screen==="book" ? "rgba(255,255,255,.45)" : "transparent"}`,
+              background:selBook?.id===b.id && screen==="book" ? C.sbSurf : "none",
+              marginBottom:2
+            }}
+          >
+            <div style={{width:4,minWidth:4,height:40,borderRadius:2,background:spineC(b.id),marginTop:2}}/>
+            <div style={{flex:1,minWidth:0}}>
+              <div style={{fontSize:13,fontWeight:600,color:C.sbInk,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>
+                {b.title}
+              </div>
+              {b.author && (
+                <div style={{fontSize:12,color:C.sbInkD,marginTop:2,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>
+                  {b.author}
+                </div>
+              )}
+              <div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap",marginTop:3}}>
+                {b.category && <div style={{fontSize:10,color:C.sbInkF}}>{b.category}</div>}
+                {b._hasNotes && <div style={{fontSize:10,color:"#c7e4ff"}}>Notas</div>}
+              </div>
+            </div>
+          </div>
+        ))}
+
+        {!filteredBooks.length && (
+          <p style={{fontSize:13,color:C.sbInkF,padding:"10px 4px"}}>
+            {books.length===0 ? "Nenhum livro ainda." : "Sem resultados."}
+          </p>
+        )}
+      </div>
+
+      <input ref={fileRef} type="file" accept=".pdf" style={{display:"none"}} onChange={handleFilePick}/>
+      <button
+        onClick={()=>fileRef.current?.click()}
+        style={{margin:"0 10px 14px",display:"flex",alignItems:"center",justifyContent:"center",gap:7,padding:"10px",border:"1px dashed rgba(255,255,255,.28)",borderRadius:7,cursor:"pointer",color:C.sbInk,fontSize:13,fontWeight:700,background:"none"}}
+      >
+        <Ico d={D.up} sz={15}/> Adicionar livro (PDF)
+      </button>
+    </aside>
+  );
+}
+
+// Library
+function Library({dirHandle,apiKey,userName:initUser}){
+  const [books,setBooks] = useState([]);
+  const [cats,setCats] = useState([...DEF_CATS]);
+  const [profiles,setProfiles] = useState([]);
+  const [wishlist,setWishlist] = useState([]);
+  const [stats,setStats] = useState({consultations:{}});
+  const [screen,setScreen] = useState("home");
+  const [selBook,setSelBook] = useState(null);
+  const [bookText,setBookText] = useState("");
+  const [bookMsgs,setBookMsgs] = useState([]);
+  const [chatSessions,setChatSessions] = useState([]);
+  const [otherSessions,setOtherSessions] = useState({});
+  const [activeChatId,setActiveChatId] = useState(null);
+  const [globalMsgs,setGlobalMsgs] = useState([]);
+  const [globalTexts,setGlobalTexts] = useState(null);
+  const [chatLoading,setChatLoading] = useState(false);
+  const [globalLoading,setGlobalLoading] = useState(false);
+
+  const [searchQ,setSearchQ] = useState("");
+  const [searchDraft,setSearchDraft] = useState("");
+  const [tagQuery,setTagQuery] = useState("");
+  const [tagDraft,setTagDraft] = useState("");
   const [selectedCategory,setSelectedCategory] = useState("");
-  const [modal,setModal]                = useState(null);
-  const [editBook,setEditBook]          = useState(null);
-  const [wishModal,setWishModal]        = useState(false);
-  const [wishEdit,setWishEdit]          = useState(null);
-  const [pendingFile,setPendingFile]    = useState(null);
-  const [uploading,setUploading]        = useState(false);
-  const [upProg,setUpProg]              = useState(0);
-  const [upErr,setUpErr]                = useState("");
-  const [userName,setUserName]          = useState(initUser);
-  const [lastBook,setLastBook]          = useState(null);
+  const [modal,setModal] = useState(null);
+  const [editBook,setEditBook] = useState(null);
+  const [wishModal,setWishModal] = useState(false);
+  const [wishEdit,setWishEdit] = useState(null);
+  const [pendingFile,setPendingFile] = useState(null);
+  const [uploading,setUploading] = useState(false);
+  const [upProg,setUpProg] = useState(0);
+  const [upErr,setUpErr] = useState("");
+  const [userName,setUserName] = useState(initUser);
+  const [lastBook,setLastBook] = useState(null);
   const fileRef=useRef();
 
   const otherProfiles=useMemo(()=>profiles.filter(p=>p!==userName),[profiles,userName]);
@@ -1467,9 +1860,24 @@ function Library({dirHandle,apiKey,userName:initUser}){
       if(lastId){
         const found=booksWithMeta.find(x=>x.id===lastId);
         if(found) setLastBook(found);
+        else localStorage.removeItem("mynd_lastBook");
       }
     })();
   },[dirHandle]);
+
+  useEffect(()=>{
+    setGlobalTexts(null);
+  },[books]);
+
+  useEffect(()=>{
+    const t = setTimeout(()=>setSearchQ(searchDraft), 160);
+    return ()=>clearTimeout(t);
+  },[searchDraft]);
+
+  useEffect(()=>{
+    const t = setTimeout(()=>setTagQuery(tagDraft), 160);
+    return ()=>clearTimeout(t);
+  },[tagDraft]);
 
   const persist=async(nextBooks=books,nextCats=cats,nextWishlist=wishlist,nextProfiles=profiles)=>{
     const booksToStore=nextBooks.map(({_hasNotes,_hasChats,...rest})=>rest);
@@ -1485,7 +1893,7 @@ function Library({dirHandle,apiKey,userName:initUser}){
     const trimmed=(name||"").trim();
     if(!trimmed) return;
     if(profiles.includes(trimmed)) return;
-    const next=[...profiles,trimmed];
+    const next=uniqueCaseInsensitive([...profiles,trimmed]);
     setProfiles(next);
     await persist(books,cats,wishlist,next);
   };
@@ -1510,7 +1918,7 @@ function Library({dirHandle,apiKey,userName:initUser}){
     return [...s].sort((a,b)=>a.localeCompare(b,"pt-BR"));
   },[books]);
 
-  const filtered=useMemo(()=>{
+  const filteredBooks=useMemo(()=>{
     return books.filter(b=>{
       const matchesSearch = !searchQ.trim() || (
         b.title.toLowerCase().includes(searchQ.toLowerCase()) ||
@@ -1533,11 +1941,11 @@ function Library({dirHandle,apiKey,userName:initUser}){
     return m;
   },[books]);
 
-  const hasActiveFilter = !!searchQ.trim() || !!tagQuery.trim() || !!selectedCategory;
+  const hasActiveFilter = !!searchDraft.trim() || !!tagDraft.trim() || !!selectedCategory;
 
   const clearFilters=()=>{
-    setSearchQ("");
-    setTagQuery("");
+    setSearchDraft("");
+    setTagDraft("");
     setSelectedCategory("");
   };
 
@@ -1582,10 +1990,10 @@ function Library({dirHandle,apiKey,userName:initUser}){
       const id=uid();
       const book={
         id,
-        title:fd.title.trim(),
-        author:fd.author.trim(),
-        category:fd.category,
-        tags:fd.tags,
+        title:trimStr(fd.title),
+        author:trimStr(fd.author),
+        category:trimStr(fd.category),
+        tags:normalizeTags(fd.tags),
         pages,
         summary,
         addedAt:new Date().toISOString(),
@@ -1614,9 +2022,9 @@ function Library({dirHandle,apiKey,userName:initUser}){
   };
 
   const doEdit=async(fd)=>{
-    const nb=books.map(b=>b.id===editBook.id ? {...b,...fd} : b);
+    const nb=books.map(b=>b.id===editBook.id ? {...b,...fd,tags:normalizeTags(fd.tags)} : b);
     setBooks(nb);
-    if(selBook?.id===editBook.id) setSelBook(p=>({...p,...fd}));
+    if(selBook?.id===editBook.id) setSelBook(p=>({...p,...fd,tags:normalizeTags(fd.tags)}));
     await persist(nb,cats,wishlist,profiles);
     setModal(null);
     setEditBook(null);
@@ -1644,15 +2052,36 @@ function Library({dirHandle,apiKey,userName:initUser}){
     setBooks(nb);
     await persist(nb,cats,wishlist,profiles);
 
+    setStats(prev=>{
+      const nextConsultations={...prev.consultations};
+      delete nextConsultations[book.id];
+      const next={...prev, consultations:nextConsultations};
+      saveStats(dirHandle,next);
+      return next;
+    });
+
     if(selBook?.id===book.id){
       setSelBook(null);
+      setBookText("");
+      setBookMsgs([]);
+      setChatSessions([]);
+      setOtherSessions({});
+      setActiveChatId(null);
       setScreen("home");
     }
+
+    if(lastBook?.id===book.id){
+      setLastBook(null);
+      localStorage.removeItem("mynd_lastBook");
+    }
+
+    localStorage.removeItem(`mynd_lastChat_${book.id}`);
   };
 
   const saveCats=async(nc)=>{
-    setCats(nc);
-    await persist(books,nc,wishlist,profiles);
+    const normalized = normalizeCategories(nc);
+    setCats(normalized);
+    await persist(books,normalized,wishlist,profiles);
     setModal(null);
   };
 
@@ -1676,27 +2105,36 @@ function Library({dirHandle,apiKey,userName:initUser}){
   };
 
   const openBook=async(book)=>{
-    setSelBook(book);
-    setScreen("book");
-    setLastBook(book);
-    localStorage.setItem("mynd_lastBook",book.id);
-    await bumpStat(book.id);
+    const freshBook = books.find(b=>b.id===book.id) || book;
 
-    const txt=await rf(dirHandle,`${book.id}.txt`);
+    setSelBook(freshBook);
+    setScreen("book");
+    setLastBook(freshBook);
+    localStorage.setItem("mynd_lastBook",freshBook.id);
+
+    setBookMsgs([]);
+    setChatSessions([]);
+    setOtherSessions({});
+    setActiveChatId(null);
+
+    await bumpStat(freshBook.id);
+
+    const txt=await rf(dirHandle,`${freshBook.id}.txt`);
     setBookText(txt || "");
 
-    const sessions=await loadChats(dirHandle,book.id,userName);
+    const sessions=await loadChats(dirHandle,freshBook.id,userName);
     setChatSessions(sessions);
 
     const others={};
     for(const p of otherProfiles){
-      const ss=await loadChats(dirHandle,book.id,p);
+      const ss=await loadChats(dirHandle,freshBook.id,p);
       if(ss.length) others[p]=ss;
     }
     setOtherSessions(others);
 
-    const lastId=localStorage.getItem(`mynd_lastChat_${book.id}`);
+    const lastId=localStorage.getItem(`mynd_lastChat_${freshBook.id}`);
     const last=sessions.find(s=>s.id===lastId);
+
     if(last){
       setBookMsgs(last.messages);
       setActiveChatId(last.id);
@@ -1751,8 +2189,6 @@ function Library({dirHandle,apiKey,userName:initUser}){
 
   const openGlobal=async()=>{
     setScreen("global");
-    if(globalTexts) return;
-
     setGlobalLoading(true);
     const t={};
     for(const b of books){
@@ -1775,7 +2211,7 @@ function Library({dirHandle,apiKey,userName:initUser}){
       setBookMsgs(final);
       await saveCurrentChat(final);
     }catch(e){
-      setBookMsgs(p=>[...p,mkM("assistant","Erro: " + e.message)]);
+      setBookMsgs(p=>[...p,mkM("assistant","Erro: " + e.message + ". Tente novamente.")]);
     }
     setChatLoading(false);
   };
@@ -1789,14 +2225,14 @@ function Library({dirHandle,apiKey,userName:initUser}){
       const r=await callClaude(apiKey,sysGlobal(books,globalTexts),next);
       setGlobalMsgs(p=>[...p,mkM("assistant",r)]);
     }catch(e){
-      setGlobalMsgs(p=>[...p,mkM("assistant","Erro: " + e.message)]);
+      setGlobalMsgs(p=>[...p,mkM("assistant","Erro: " + e.message + ". Tente novamente.")]);
     }
     setChatLoading(false);
   };
 
   const exportChat=(msgs,title)=>{
     const txt=msgs.map(m=>`[${m.role==="user" ? (userName || "Você") : "Mynd Library"}]\n${m.content}`).join("\n\n──────────────────\n\n");
-    const blob=new Blob([`Conversa: ${title}\n${"═".repeat(36)}\n\n${txt}`],{type:"text/plain"});
+    const blob=new Blob([`Conversa: ${title}\nPerfil: ${userName}\nData: ${new Date().toLocaleString("pt-BR")}\n${"═".repeat(36)}\n\n${txt}`],{type:"text/plain"});
     const a=document.createElement("a");
     a.href=URL.createObjectURL(blob);
     a.download=`conversa_${title.replace(/\s+/g,"_").slice(0,30)}.txt`;
@@ -1809,7 +2245,10 @@ function Library({dirHandle,apiKey,userName:initUser}){
     setUserName(trimmed);
     localStorage.setItem("mynd_user",trimmed);
     await ensureProfileSaved(trimmed);
-    if(selBook) openBook(selBook);
+    if(selBook){
+      const fresh = books.find(b=>b.id===selBook.id);
+      if(fresh) await openBook(fresh);
+    }
   };
 
   const updateBookNotesPresence=async(bookId,hasNotes)=>{
@@ -1818,200 +2257,6 @@ function Library({dirHandle,apiKey,userName:initUser}){
     if(selBook?.id===bookId) setSelBook(p=>p?{...p,_hasNotes:hasNotes}:p);
     await persist(nb,cats,wishlist,profiles);
   };
-
-  const suggClick=(fn,txt)=>()=>fn(txt);
-    // ── Sidebar ────────────────────────────────────────────────────────────────
-  const Sidebar=()=>(
-    <aside style={{width:285,minWidth:285,background:C.sb,borderRight:`1px solid ${C.sbBorder}`,display:"flex",flexDirection:"column",overflowY:"auto"}}>
-      <div style={{padding:"16px 14px 12px",borderBottom:`1px solid ${C.sbBorder}`}}>
-        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:4,gap:8}}>
-          <div style={{fontSize:19,fontWeight:700,color:C.sbInk,display:"flex",alignItems:"center",gap:8}}>
-            <Ico d={D.book} sz={17} col={C.sbInk}/> Mynd Library
-          </div>
-          <ProfileSwitcher userName={userName} onSwitch={switchProfile} profiles={profiles}/>
-        </div>
-        <div style={{...sbLb,marginTop:3}}>{dirHandle.name}</div>
-      </div>
-
-      <div style={{padding:"10px 10px 8px",borderBottom:`1px solid ${C.sbBorder}`}}>
-        {[
-          {id:"home",label:"Página inicial",icon:D.home,fn:()=>setScreen("home")},
-          {id:"global",label:"Pesquisar na biblioteca",icon:D.globe,fn:openGlobal},
-        ].map(({id,label,icon,fn})=>(
-          <button
-            key={id}
-            onClick={fn}
-            style={{
-              width:"100%",display:"flex",alignItems:"center",gap:8,padding:"8px 10px",marginBottom:3,
-              borderRadius:7,cursor:"pointer",border:"none",textAlign:"left",fontSize:13,
-              fontWeight:screen===id?700:500,background:screen===id?C.sbSurf:"none",
-              color:screen===id?C.sbInk:C.sbInkD
-            }}
-          >
-            <Ico d={icon} sz={15} col={C.sbInk}/>{label}
-          </button>
-        ))}
-      </div>
-
-      <div style={{padding:"10px 11px 8px",borderBottom:`1px solid ${C.sbBorder}`}}>
-        <div style={{...sbLb,marginBottom:7,display:"flex",alignItems:"center",gap:6}}>
-          <Ico d={D.search} sz={10}/> Pesquisar um livro
-        </div>
-
-        <div style={{display:"flex",alignItems:"center",gap:7,background:"rgba(0,0,0,.2)",border:`1px solid ${searchQ.trim()?"rgba(255,255,255,.45)":C.sbBorder}`,borderRadius:6,padding:"7px 10px",marginBottom:10}}>
-          <Ico d={D.search} sz={13} col={C.sbInk}/>
-          <input
-            value={searchQ}
-            onChange={e=>setSearchQ(e.target.value)}
-            placeholder="Título ou autor…"
-            style={{flex:1,background:"none",border:"none",outline:"none",color:C.sbInk,fontSize:13,minWidth:0}}
-          />
-          {searchQ && (
-            <button onClick={()=>setSearchQ("")} style={{background:"none",border:"none",cursor:"pointer",color:C.sbInk,display:"flex"}}>
-              <Ico d={D.close} sz={12}/>
-            </button>
-          )}
-        </div>
-
-        <div style={{...sbLb,marginBottom:6,display:"flex",alignItems:"center",gap:4}}>
-          <Ico d={D.tag} sz={10}/> Pesquisa por tag
-        </div>
-
-        <div style={{display:"flex",alignItems:"center",gap:7,background:"rgba(0,0,0,.2)",border:`1px solid ${tagQuery.trim()?"rgba(255,255,255,.45)":C.sbBorder}`,borderRadius:6,padding:"7px 10px",marginBottom:8}}>
-          <Ico d={D.tag} sz={13} col={C.sbInk}/>
-          <input
-            value={tagQuery}
-            onChange={e=>setTagQuery(e.target.value)}
-            placeholder="Digite uma tag…"
-            style={{flex:1,background:"none",border:"none",outline:"none",color:C.sbInk,fontSize:13,minWidth:0}}
-          />
-          {tagQuery && (
-            <button onClick={()=>setTagQuery("")} style={{background:"none",border:"none",cursor:"pointer",color:C.sbInk,display:"flex"}}>
-              <Ico d={D.close} sz={12}/>
-            </button>
-          )}
-        </div>
-
-        {allTags.length > 0 && (
-          <div style={{marginBottom:10}}>
-            <div style={{...sbLb,marginBottom:6,display:"flex",alignItems:"center",gap:4}}>
-              <Ico d={D.tag} sz={10}/> Tags disponíveis
-            </div>
-            <div style={{display:"flex",flexWrap:"wrap",gap:5,maxHeight:90,overflowY:"auto"}}>
-              {allTags.map(t=>(
-                <button
-                  key={t}
-                  onClick={()=>setTagQuery(t)}
-                  style={{
-                    fontSize:11,padding:"2px 8px",borderRadius:10,cursor:"pointer",
-                    border:`1px solid ${tagQuery.toLowerCase()===t.toLowerCase()?"rgba(255,255,255,.75)":"rgba(255,255,255,.28)"}`,
-                    background:tagQuery.toLowerCase()===t.toLowerCase()?"rgba(255,255,255,.18)":"rgba(255,255,255,.08)",
-                    color:C.sbInk,fontWeight:600
-                  }}
-                >
-                  {t}
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
-
-        <div>
-          <div style={{...sbLb,marginBottom:6,display:"flex",alignItems:"center",justifyContent:"space-between"}}>
-            <span style={{display:"flex",alignItems:"center",gap:4}}><Ico d={D.list} sz={10}/> Categorias</span>
-            <button onClick={()=>setModal({type:"cats"})} title="Gerenciar categorias" style={{background:"none",border:"none",cursor:"pointer",color:C.sbInk,display:"flex",padding:2}}>
-              <Ico d={D.edit} sz={11}/>
-            </button>
-          </div>
-
-          <div style={{display:"flex",flexDirection:"column",gap:1}}>
-            {["Todas", ...cats].map(cat=>(
-              <button
-                key={cat}
-                onClick={()=>{
-                  if(cat==="Todas"){
-                    setSelectedCategory("");
-                    return;
-                  }
-                  setSelectedCategory(cat);
-                }}
-                style={{
-                  display:"flex",alignItems:"center",justifyContent:"space-between",
-                  padding:"5px 9px",borderRadius:6,cursor:"pointer",border:"none",
-                  background:(cat!=="Todas" && selectedCategory===cat) ? C.sbSurf : (!selectedCategory && cat==="Todas" ? C.sbSurf : "none"),
-                  color:(cat!=="Todas" && selectedCategory===cat) || (!selectedCategory && cat==="Todas") ? C.sbInk : C.sbInkD,
-                  fontSize:12,textAlign:"left",fontWeight:500
-                }}
-              >
-                <span>{cat}</span>
-                <span style={{fontSize:11,color:C.sbInkF}}>
-                  {cat==="Todas" ? books.length : (catCounts[cat] || 0)}
-                </span>
-              </button>
-            ))}
-          </div>
-        </div>
-
-        {hasActiveFilter && (
-          <div style={{marginTop:8,display:"flex",alignItems:"center",gap:6,background:"rgba(255,255,255,.1)",border:"1px solid rgba(255,255,255,.18)",borderRadius:6,padding:"5px 10px"}}>
-            <span style={{fontSize:12,color:C.sbInk,flex:1}}>
-              {searchQ.trim() && `Busca: ${searchQ}`}
-              {!searchQ.trim() && tagQuery.trim() && `Tag: ${tagQuery}`}
-              {!searchQ.trim() && !tagQuery.trim() && selectedCategory && `Categoria: ${selectedCategory}`}
-            </span>
-            <button onClick={clearFilters} style={{background:"none",border:"none",cursor:"pointer",color:C.sbInk,display:"flex"}}>
-              <Ico d={D.close} sz={12}/>
-            </button>
-          </div>
-        )}
-      </div>
-
-      <div style={{padding:"8px 9px 12px"}}>
-        {filtered.map(b=>(
-          <div
-            key={b.id}
-            onClick={()=>openBook(b)}
-            style={{
-              display:"flex",alignItems:"flex-start",gap:8,padding:"8px 8px",borderRadius:7,cursor:"pointer",
-              border:`1px solid ${selBook?.id===b.id && screen==="book" ? "rgba(255,255,255,.45)" : "transparent"}`,
-              background:selBook?.id===b.id && screen==="book" ? C.sbSurf : "none",
-              marginBottom:2
-            }}
-          >
-            <div style={{width:4,minWidth:4,height:40,borderRadius:2,background:spineC(b.id),marginTop:2}}/>
-            <div style={{flex:1,minWidth:0}}>
-              <div style={{fontSize:13,fontWeight:600,color:C.sbInk,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>
-                {b.title}
-              </div>
-              {b.author && (
-                <div style={{fontSize:12,color:C.sbInkD,marginTop:2,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>
-                  {b.author}
-                </div>
-              )}
-              <div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap",marginTop:3}}>
-                {b.category && <div style={{fontSize:10,color:C.sbInkF}}>{b.category}</div>}
-                {b._hasNotes && <div style={{fontSize:10,color:"#c7e4ff"}}>Notas</div>}
-              </div>
-            </div>
-          </div>
-        ))}
-
-        {!filtered.length && (
-          <p style={{fontSize:13,color:C.sbInkF,padding:"10px 4px"}}>
-            {books.length===0 ? "Nenhum livro ainda." : "Sem resultados."}
-          </p>
-        )}
-      </div>
-
-      <input ref={fileRef} type="file" accept=".pdf" style={{display:"none"}} onChange={handleFilePick}/>
-      <button
-        onClick={()=>fileRef.current?.click()}
-        style={{margin:"0 10px 14px",display:"flex",alignItems:"center",justifyContent:"center",gap:7,padding:"10px",border:"1px dashed rgba(255,255,255,.28)",borderRadius:7,cursor:"pointer",color:C.sbInk,fontSize:13,fontWeight:700,background:"none"}}
-      >
-        <Ico d={D.up} sz={15}/> Adicionar livro (PDF)
-      </button>
-    </aside>
-  );
 
   const WelcomeBook=()=>(
     <div style={{background:C.surf,border:`1px solid ${C.border}`,borderRadius:10,padding:"20px 24px"}}>
@@ -2024,7 +2269,7 @@ function Library({dirHandle,apiKey,userName:initUser}){
           <button
             key={s}
             style={{fontSize:13,padding:"6px 12px",borderRadius:6,border:`1px solid ${C.border}`,background:"none",color:C.inkD,cursor:"pointer",fontWeight:500}}
-            onClick={suggClick(sendBook,s)}
+            onClick={()=>sendBook(s)}
           >
             {s}
           </button>
@@ -2048,7 +2293,7 @@ function Library({dirHandle,apiKey,userName:initUser}){
             <button
               key={s}
               style={{fontSize:13,padding:"6px 12px",borderRadius:6,border:`1px solid ${C.border}`,background:"none",color:C.inkD,cursor:"pointer",fontWeight:500}}
-              onClick={suggClick(sendGlobal,s)}
+              onClick={()=>sendGlobal(s)}
             >
               {s}
             </button>
@@ -2060,12 +2305,39 @@ function Library({dirHandle,apiKey,userName:initUser}){
 
   return(
     <div style={{display:"flex",height:"100vh",color:C.ink,overflow:"hidden"}}>
-      <Sidebar/>
+      <Sidebar
+        dirHandle={dirHandle}
+        userName={userName}
+        profiles={profiles}
+        switchProfile={switchProfile}
+        screen={screen}
+        setScreen={setScreen}
+        openGlobal={openGlobal}
+        searchDraft={searchDraft}
+        setSearchDraft={setSearchDraft}
+        tagDraft={tagDraft}
+        setTagDraft={setTagDraft}
+        allTags={allTags}
+        selectedCategory={selectedCategory}
+        setSelectedCategory={setSelectedCategory}
+        cats={cats}
+        catCounts={catCounts}
+        books={books}
+        filteredBooks={filteredBooks}
+        selBook={selBook}
+        openBook={openBook}
+        clearFilters={clearFilters}
+        hasActiveFilter={hasActiveFilter}
+        setModal={setModal}
+        fileRef={fileRef}
+        handleFilePick={handleFilePick}
+      />
 
       <main style={{flex:1,overflow:"hidden",display:"flex",flexDirection:"column",background:C.bg}}>
         {screen==="home" && (
           <HomePage
-            books={books}
+            visibleBooks={filteredBooks}
+            allBooks={books}
             wishlist={wishlist}
             stats={stats}
             lastBook={lastBook}
@@ -2086,10 +2358,10 @@ function Library({dirHandle,apiKey,userName:initUser}){
               <div style={{flex:1}}>
                 <div style={{fontSize:24,fontWeight:700,color:C.ink}}>{selBook.title}</div>
                 {selBook.author && <div style={{fontSize:15,color:C.inkF,marginTop:3}}>{selBook.author}</div>}
-                <div style={{display:"flex",flexWrap:"wrap",gap:7,marginTop:8}}>
+                <div style={{display:"flex",flexWrap:"wrap",gap:10,rowGap:6,marginTop:10,alignItems:"center"}}>
                   {selBook.category && <span style={{...tp,fontSize:12}}>Categoria: {selBook.category}</span>}
                   {(selBook.tags||[]).length > 0 && <span style={{fontSize:13,color:C.inkF}}>Tags: {(selBook.tags||[]).join(", ")}</span>}
-                  {selBook.pages && <span style={{fontSize:13,color:C.inkF}}>{selBook.pages} pág.</span>}
+                  {selBook.pages && <span style={{fontSize:13,color:C.inkF}}>• {selBook.pages} pág.</span>}
                 </div>
               </div>
               <button style={bI} onClick={()=>{setEditBook(selBook); setModal({type:"edit",initial:selBook});}}><Ico d={D.edit} sz={14}/></button>
@@ -2175,7 +2447,7 @@ function Library({dirHandle,apiKey,userName:initUser}){
   );
 }
 
-// ─── Root ─────────────────────────────────────────────────────────────────────
+// Root
 function Root(){
   const [phase,setPhase]=useState("loading");
   const [dirHandle,setDir]=useState(null);
@@ -2230,6 +2502,7 @@ function Root(){
   );
 
   if(phase==="loading") return center("Carregando…");
+
   if(phase==="unsupported") return center(
     "Navegador não suportado",
     'Esta versão requer <strong>Google Chrome</strong> ou Microsoft Edge (v86+).<br/>Firefox e Safari não suportam a File System Access API.'
