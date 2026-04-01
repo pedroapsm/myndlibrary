@@ -490,7 +490,8 @@ const D = {
   play:"M5 3l14 9-14 9V3z",
   save:"M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2zM17 21v-8H7v8M7 3v5h8",
 };
-  // ─── Base styles ──────────────────────────────────────────────────────────────
+
+// ─── Base styles ──────────────────────────────────────────────────────────────
 const ov = {
   position:"fixed", inset:0, background:"rgba(10,20,40,.55)",
   display:"flex", alignItems:"center", justifyContent:"center",
@@ -687,6 +688,7 @@ function CatModal({categories,onSave,onClose}){
   const [cats,setCats]=useState([...categories]);
   const [nv,setNv]=useState("");
   const [ed,setEd]=useState(null);
+  const [renameMap,setRenameMap]=useState({});
 
   const add=()=>{
     const v=trimStr(nv);
@@ -694,6 +696,29 @@ function CatModal({categories,onSave,onClose}){
     const next = uniqueCaseInsensitive([...cats, v]);
     setCats(next);
     setNv("");
+  };
+
+  const saveEdit=(i)=>{
+    const oldValue = cats[i];
+    const val = trimStr(ed?.v);
+    if(!val){
+      setEd(null);
+      return;
+    }
+
+    const updated=[...cats];
+    updated[i]=val;
+    const deduped=uniqueCaseInsensitive(updated);
+
+    if(oldValue !== val){
+      setRenameMap(prev=>({
+        ...prev,
+        [oldValue]: val
+      }));
+    }
+
+    setCats(deduped);
+    setEd(null);
   };
 
   return(
@@ -711,30 +736,14 @@ function CatModal({categories,onSave,onClose}){
                     value={ed.v}
                     onChange={e=>setEd(p=>({...p,v:e.target.value}))}
                     onKeyDown={e=>{
-                      if(e.key==="Enter"){
-                        const val=trimStr(ed.v);
-                        if(val){
-                          const updated=[...cats];
-                          updated[i]=val;
-                          setCats(uniqueCaseInsensitive(updated));
-                        }
-                        setEd(null);
-                      }
+                      if(e.key==="Enter") saveEdit(i);
                       if(e.key==="Escape") setEd(null);
                     }}
                     style={{...fi,padding:"4px 8px",fontSize:14,flex:1}}
                   />
                   <button
                     style={{...bI,borderColor:C.accentBrd,color:C.accent}}
-                    onClick={()=>{
-                      const val=trimStr(ed.v);
-                      if(val){
-                        const updated=[...cats];
-                        updated[i]=val;
-                        setCats(uniqueCaseInsensitive(updated));
-                      }
-                      setEd(null);
-                    }}
+                    onClick={()=>saveEdit(i)}
                   >
                     <Ico d={D.check} sz={14}/>
                   </button>
@@ -768,7 +777,17 @@ function CatModal({categories,onSave,onClose}){
 
         <div style={{display:"flex",gap:10,justifyContent:"flex-end"}}>
           <button style={bG} onClick={onClose}>Cancelar</button>
-          <button style={bP(false)} onClick={()=>onSave(normalizeCategories(cats))}>Salvar</button>
+          <button
+            style={bP(false)}
+            onClick={()=>{
+              onSave({
+                categories: normalizeCategories(cats),
+                renameMap
+              });
+            }}
+          >
+            Salvar
+          </button>
         </div>
       </div>
     </div>
@@ -1257,7 +1276,8 @@ function ChatHistory({sessions,otherSessions,activeId,onSelect,onNew,otherProfil
     </div>
   );
 }
-  // ─── HomePage ─────────────────────────────────────────────────────────────────
+
+// ─── HomePage ─────────────────────────────────────────────────────────────────
 function HomePage({
   visibleBooks, allBooks, wishlist,onAddWish,onEditWish,onDeleteWish,lastBook,onContinue,
   stats,onOpenBook,onEditBook,onDeleteBook,onClearFilters,hasActiveFilter,onAddBook
@@ -1489,8 +1509,7 @@ function HomePage({
     </div>
   );
 }
-
-// ─── Setup ────────────────────────────────────────────────────────────────────
+  // ─── Setup ────────────────────────────────────────────────────────────────────
 function Setup({onReady}){
   const [apiKey,setKey]=useState(()=>localStorage.getItem("mynd_apikey") || "");
   const [dir,setDir]=useState(null);
@@ -1674,8 +1693,30 @@ function Sidebar({
   handleFilePick
 }){
   return(
-    <aside style={{width:296,minWidth:296,background:C.sb,borderRight:`1px solid ${C.sbBorder}`,display:"flex",flexDirection:"column",overflow:"hidden"}}>
-      <div style={{padding:"16px 14px 12px",borderBottom:`1px solid ${C.sbBorder}`,flexShrink:0}}>
+    <aside
+      className="sidebar-shell"
+      style={{
+        width:296,
+        minWidth:296,
+        background:C.sb,
+        borderRight:`1px solid ${C.sbBorder}`,
+        display:"flex",
+        flexDirection:"column",
+        overflowY:"auto",
+        overflowX:"hidden"
+      }}
+    >
+      <div
+        style={{
+          padding:"16px 14px 12px",
+          borderBottom:`1px solid ${C.sbBorder}`,
+          flexShrink:0,
+          position:"sticky",
+          top:0,
+          background:C.sb,
+          zIndex:3
+        }}
+      >
         <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:4,gap:8}}>
           <div style={{fontSize:19,fontWeight:700,color:C.sbInk,display:"flex",alignItems:"center",gap:8,whiteSpace:"nowrap"}}>
             <Ico d={D.book} sz={17} col={C.sbInk}/> Mynd Library
@@ -1685,7 +1726,17 @@ function Sidebar({
         <div style={{...sbLb,marginTop:3}}>{dirHandle.name}</div>
       </div>
 
-      <div style={{padding:"10px 10px 8px",borderBottom:`1px solid ${C.sbBorder}`,flexShrink:0}}>
+      <div
+        style={{
+          padding:"10px 10px 8px",
+          borderBottom:`1px solid ${C.sbBorder}`,
+          flexShrink:0,
+          position:"sticky",
+          top:57,
+          background:C.sb,
+          zIndex:3
+        }}
+      >
         {[
           {id:"home",label:"Página inicial",icon:D.home,fn:()=>setScreen("home")},
           {id:"global",label:"Pesquisar na biblioteca",icon:D.globe,fn:openGlobal},
@@ -1705,7 +1756,7 @@ function Sidebar({
         ))}
       </div>
 
-      <div style={{flex:1,overflowY:"auto",minHeight:0}}>
+      <div style={{flex:1,minHeight:0}}>
         <div style={{padding:"10px 11px 8px",borderBottom:`1px solid ${C.sbBorder}`}}>
           <div style={{...sbLb,marginBottom:7,display:"flex",alignItems:"center",gap:6}}>
             <Ico d={D.search} sz={10}/> Pesquisar um livro
@@ -1839,17 +1890,42 @@ function Sidebar({
               >
                 <div style={{width:5,minWidth:5,borderRadius:3,background:spineC(b.id)}}/>
                 <div style={{flex:1,minWidth:0}}>
-                  <div style={{fontSize:13,color:C.sbInkF,marginBottom:2}}>
-                    {b.pages ? `${b.pages} pág.` : "—"}
+                  <div style={{display:"flex",alignItems:"flex-start"}}>
+                    <div
+                      style={{
+                        flex:1,
+                        minWidth:0,
+                        fontSize:13,
+                        fontWeight:600,
+                        color:C.sbInk,
+                        whiteSpace:"nowrap",
+                        overflow:"hidden",
+                        textOverflow:"ellipsis"
+                      }}
+                    >
+                      {b.title}
+                    </div>
+
+                    <div
+                      style={{
+                        marginLeft:"auto",
+                        paddingLeft:8,
+                        fontSize:11,
+                        color:C.sbInkF,
+                        whiteSpace:"nowrap",
+                        flexShrink:0
+                      }}
+                    >
+                      {b.pages ? `${b.pages} pág.` : "—"}
+                    </div>
                   </div>
-                  <div style={{fontSize:13,fontWeight:600,color:C.sbInk,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>
-                    {b.title}
-                  </div>
+
                   {b.author && (
                     <div style={{fontSize:12,color:C.sbInkD,marginTop:2,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>
                       {b.author}
                     </div>
                   )}
+
                   <div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap",marginTop:3}}>
                     {b.category && <div style={{fontSize:10,color:C.sbInkF}}>{b.category}</div>}
                     {b._hasNotes && <div style={{fontSize:10,color:"#c7e4ff"}}>Notas</div>}
@@ -1867,7 +1943,17 @@ function Sidebar({
         </div>
       </div>
 
-      <div style={{padding:"12px",borderTop:`1px solid ${C.sbBorder}`,background:C.sb,flexShrink:0}}>
+      <div
+        style={{
+          padding:"12px",
+          borderTop:`1px solid ${C.sbBorder}`,
+          background:C.sb,
+          flexShrink:0,
+          position:"sticky",
+          bottom:0,
+          zIndex:3
+        }}
+      >
         <input ref={fileRef} type="file" accept=".pdf" style={{display:"none"}} onChange={handleFilePick}/>
         <button
           onClick={()=>fileRef.current?.click()}
@@ -1883,8 +1969,7 @@ function Sidebar({
     </aside>
   );
 }
-
-// ─── Library ──────────────────────────────────────────────────────────────────
+  // ─── Library ──────────────────────────────────────────────────────────────────
 function Library({dirHandle,apiKey,userName:initUser}){
   const [books,setBooks] = useState([]);
   const [cats,setCats] = useState([...DEF_CATS]);
@@ -2170,10 +2255,40 @@ function Library({dirHandle,apiKey,userName:initUser}){
     localStorage.removeItem(`mynd_lastChat_${book.id}`);
   };
 
-  const saveCats=async(nc)=>{
-    const normalized = normalizeCategories(nc);
+  const saveCats=async(payload)=>{
+    const normalized = Array.isArray(payload)
+      ? normalizeCategories(payload)
+      : normalizeCategories(payload?.categories || []);
+
+    const renameMap = Array.isArray(payload)
+      ? {}
+      : (payload?.renameMap || {});
+
+    const validSet = new Set(normalized);
+
+    const nb = books.map(b=>{
+      let nextCategory = b.category || "";
+
+      if(nextCategory && renameMap[nextCategory]){
+        nextCategory = renameMap[nextCategory];
+      }
+
+      if(nextCategory && !validSet.has(nextCategory)){
+        nextCategory = "";
+      }
+
+      return {...b,category:nextCategory};
+    });
+
     setCats(normalized);
-    await persist(books,normalized,wishlist,profiles);
+    setBooks(nb);
+
+    if(selBook){
+      const updatedSel = nb.find(b=>b.id===selBook.id) || null;
+      setSelBook(updatedSel);
+    }
+
+    await persist(nb,normalized,wishlist,profiles);
     setModal(null);
   };
 
@@ -2623,7 +2738,35 @@ function Library({dirHandle,apiKey,userName:initUser}){
       {modal?.type==="edit" && editBook && <BookModal mode="edit" initial={modal.initial} categories={cats} onSave={doEdit} onClose={()=>{setModal(null); setEditBook(null);}} uploading={false} prog={0} err=""/>}
       {wishModal && <WishModal item={wishEdit} onSave={saveWish} onClose={()=>{setWishModal(false); setWishEdit(null);}}/>}
 
-      <style>{`@keyframes bob{0%,60%,100%{transform:translateY(0)}30%{transform:translateY(-6px)}}`}</style>
+      <style>{`
+        @keyframes bob{0%,60%,100%{transform:translateY(0)}30%{transform:translateY(-6px)}}
+
+        .sidebar-shell{
+          scrollbar-width: thin;
+          scrollbar-color: rgba(255,255,255,.22) transparent;
+        }
+
+        .sidebar-shell::-webkit-scrollbar{
+          width: 10px;
+        }
+
+        .sidebar-shell::-webkit-scrollbar-track{
+          background: transparent;
+        }
+
+        .sidebar-shell::-webkit-scrollbar-thumb{
+          background: rgba(255,255,255,.18);
+          border-radius: 999px;
+          border: 2px solid transparent;
+          background-clip: padding-box;
+        }
+
+        .sidebar-shell::-webkit-scrollbar-thumb:hover{
+          background: rgba(255,255,255,.28);
+          border: 2px solid transparent;
+          background-clip: padding-box;
+        }
+      `}</style>
     </div>
   );
 }
