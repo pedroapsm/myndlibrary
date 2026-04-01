@@ -20,7 +20,22 @@ body { color:#1a1614; }
 <script type="text/babel">
 const { useState, useEffect, useRef, useMemo, useCallback } = React;
 
-// ─── Constants ────────────────────────────────────────────────────────────────
+// Utils
+const uid = () => (
+  window.crypto?.randomUUID
+    ? window.crypto.randomUUID()
+    : `id_${Date.now()}_${Math.random().toString(36).slice(2,9)}`
+);
+
+const safeProfileKey = (name="") =>
+  name.replace(/[^\p{L}\p{N}_-]+/gu,"_").slice(0,80) || "perfil";
+
+const noteFileName = (bookId, profileId) =>
+  `${bookId}_notes_${safeProfileKey(profileId)}.json`;
+
+const chatFileName = (bookId, profileId) =>
+  `${bookId}_chats_${safeProfileKey(profileId)}.json`;
+
 const CURRENT_SCHEMA_VERSION = 2;
 
 const DEF_CATS = [
@@ -42,22 +57,6 @@ const LEGACY_CATS = [
 ];
 
 const LEGACY_PROFILES = ["Eu", "Minha esposa"];
-
-// ─── Utils ────────────────────────────────────────────────────────────────────
-const uid = () => (
-  window.crypto?.randomUUID
-    ? window.crypto.randomUUID()
-    : `id_${Date.now()}_${Math.random().toString(36).slice(2,9)}`
-);
-
-const safeProfileKey = (name="") =>
-  name.replace(/[^\p{L}\p{N}_-]+/gu,"_").slice(0,80) || "perfil";
-
-const noteFileName = (bookId, profileId) =>
-  `${bookId}_notes_${safeProfileKey(profileId)}.json`;
-
-const chatFileName = (bookId, profileId) =>
-  `${bookId}_chats_${safeProfileKey(profileId)}.json`;
 
 function trimStr(v){
   return typeof v === "string" ? v.trim() : "";
@@ -88,78 +87,6 @@ function normalizeTags(tags){
   return uniqueCaseInsensitive(tags.map(normalizeTagValue));
 }
 
-function truncateText(str="", max=70){
-  if(str.length <= max) return str;
-  return str.slice(0,max-1).trim() + "…";
-}
-
-function joinTags(tags=[]){
-  return tags.length ? tags.join(", ") : "—";
-}
-
-function debounce(fn, delay=180){
-  let t = null;
-  return (...args)=>{
-    clearTimeout(t);
-    t = setTimeout(()=>fn(...args), delay);
-  };
-}
-
-// ─── IndexedDB ────────────────────────────────────────────────────────────────
-function openIDB(){
-  return new Promise((res,rej)=>{
-    const r=indexedDB.open("mynd_library_v3",1);
-    r.onupgradeneeded=e=>e.target.result.createObjectStore("s");
-    r.onsuccess=e=>res(e.target.result);
-    r.onerror=()=>rej(r.error);
-  });
-}
-async function idbGet(k){
-  const db=await openIDB();
-  return new Promise((res,rej)=>{
-    const r=db.transaction("s","readonly").objectStore("s").get(k);
-    r.onsuccess=()=>res(r.result ?? null);
-    r.onerror=()=>rej(r.error);
-  });
-}
-async function idbSet(k,v){
-  const db=await openIDB();
-  return new Promise((res,rej)=>{
-    const tx=db.transaction("s","readwrite");
-    tx.objectStore("s").put(v,k);
-    tx.oncomplete=res;
-    tx.onerror=()=>rej(tx.error);
-  });
-}
-
-// ─── File System ──────────────────────────────────────────────────────────────
-async function wf(dir,name,txt){
-  const fh=await dir.getFileHandle(name,{create:true});
-  const w=await fh.createWritable();
-  await w.write(txt);
-  await w.close();
-}
-async function rf(dir,name){
-  try{
-    return await (await (await dir.getFileHandle(name)).getFile()).text();
-  }catch{
-    return null;
-  }
-}
-async function rmf(dir,name){
-  try{
-    await dir.removeEntry(name);
-  }catch{}
-}
-async function listDirFiles(dir){
-  const names=[];
-  try{
-    for await (const [name] of dir.entries()) names.push(name);
-  }catch{}
-  return names;
-}
-
-// ─── Normalization / Migration ────────────────────────────────────────────────
 function normalizeCategories(categories){
   if(!Array.isArray(categories) || !categories.length) return [...DEF_CATS];
   const cleaned = uniqueCaseInsensitive(categories);
@@ -209,44 +136,75 @@ function migrateIndexData(raw){
   };
 }
 
-// ─── Index ────────────────────────────────────────────────────────────────────
-async function loadIdx(dir){
-  const txt = await rf(dir,"index.json");
+function truncateText(str="", max=70){
+  if(str.length <= max) return str;
+  return str.slice(0,max-1).trim() + "…";
+}
 
-  if(!txt){
-    return {
-      schemaVersion: CURRENT_SCHEMA_VERSION,
-      books: [],
-      categories: [...DEF_CATS],
-      wishlist: [],
-      profiles: []
-    };
-  }
+function joinTags(tags=[]){
+  return tags.length ? tags.join(", ") : "—";
+}
 
+// IndexedDB
+function openIDB(){
+  return new Promise((res,rej)=>{
+    const r=indexedDB.open("mynd_library_v4",1);
+    r.onupgradeneeded=e=>e.target.result.createObjectStore("s");
+    r.onsuccess=e=>res(e.target.result);
+    r.onerror=()=>rej(r.error);
+  });
+}
+
+async function idbGet(k){
+  const db=await openIDB();
+  return new Promise((res,rej)=>{
+    const r=db.transaction("s","readonly").objectStore("s").get(k);
+    r.onsuccess=()=>res(r.result ?? null);
+    r.onerror=()=>rej(r.error);
+  });
+}
+
+async function idbSet(k,v){
+  const db=await openIDB();
+  return new Promise((res,rej)=>{
+    const tx=db.transaction("s","readwrite");
+    tx.objectStore("s").put(v,k);
+    tx.oncomplete=res;
+    tx.onerror=()=>rej(tx.error);
+  });
+}
+
+// File System
+async function wf(dir,name,txt){
+  const fh=await dir.getFileHandle(name,{create:true});
+  const w=await fh.createWritable();
+  await w.write(txt);
+  await w.close();
+}
+
+async function rf(dir,name){
   try{
-    const parsed = JSON.parse(txt);
-    const migrated = migrateIndexData(parsed);
-
-    const original = JSON.stringify(parsed);
-    const normalized = JSON.stringify(migrated);
-    if(original !== normalized){
-      await saveIdx(dir, migrated);
-    }
-
-    return migrated;
+    return await (await (await dir.getFileHandle(name)).getFile()).text();
   }catch{
-    const fallback = {
-      schemaVersion: CURRENT_SCHEMA_VERSION,
-      books: [],
-      categories: [...DEF_CATS],
-      wishlist: [],
-      profiles: []
-    };
-    await saveIdx(dir, fallback);
-    return fallback;
+    return null;
   }
 }
 
+async function rmf(dir,name){
+  try{
+    await dir.removeEntry(name);
+  }catch{}
+}
+
+async function listDirFiles(dir){
+  const names=[];
+  try{
+    for await (const [name] of dir.entries()) names.push(name);
+  }catch{}
+  return names;
+}
+
+// Index
 async function saveIdx(dir,data){
   await wf(dir,"index.json",JSON.stringify({
     schemaVersion: CURRENT_SCHEMA_VERSION,
@@ -257,7 +215,44 @@ async function saveIdx(dir,data){
   },null,2));
 }
 
-// ─── Chats ────────────────────────────────────────────────────────────────────
+async function loadIdx(dir){
+  const txt = await rf(dir,"index.json");
+
+  if(!txt){
+    const fresh = {
+      schemaVersion: CURRENT_SCHEMA_VERSION,
+      books: [],
+      categories: [...DEF_CATS],
+      wishlist: [],
+      profiles: []
+    };
+    await saveIdx(dir, fresh);
+    return fresh;
+  }
+
+  try{
+    const parsed = JSON.parse(txt);
+    const migrated = migrateIndexData(parsed);
+
+    if(JSON.stringify(parsed) !== JSON.stringify(migrated)){
+      await saveIdx(dir, migrated);
+    }
+
+    return migrated;
+  }catch{
+    const fresh = {
+      schemaVersion: CURRENT_SCHEMA_VERSION,
+      books: [],
+      categories: [...DEF_CATS],
+      wishlist: [],
+      profiles: []
+    };
+    await saveIdx(dir, fresh);
+    return fresh;
+  }
+}
+
+// Chats
 async function loadChats(dir,bookId,profileId){
   const txt=await rf(dir,chatFileName(bookId,profileId));
   if(!txt) return [];
@@ -268,11 +263,12 @@ async function loadChats(dir,bookId,profileId){
     return [];
   }
 }
+
 async function saveChats(dir,bookId,profileId,chats){
   await wf(dir,chatFileName(bookId,profileId),JSON.stringify(chats,null,2));
 }
 
-// ─── Notes ────────────────────────────────────────────────────────────────────
+// Notes
 async function loadNotes(dir,bookId,profileId){
   const txt=await rf(dir,noteFileName(bookId,profileId));
   if(!txt) return [];
@@ -300,11 +296,12 @@ async function loadNotes(dir,bookId,profileId){
     return [];
   }
 }
+
 async function saveNotes(dir,bookId,profileId,notes){
   await wf(dir,noteFileName(bookId,profileId),JSON.stringify(notes,null,2));
 }
 
-// ─── Stats ────────────────────────────────────────────────────────────────────
+// Stats
 async function loadStats(dir){
   const txt=await rf(dir,"stats.json");
   if(!txt) return { consultations:{} };
@@ -319,14 +316,16 @@ async function loadStats(dir){
     return { consultations:{} };
   }
 }
+
 async function saveStats(dir,stats){
   await wf(dir,"stats.json",JSON.stringify({
     consultations: stats?.consultations || {}
   },null,2));
 }
 
-// ─── PDF.js ───────────────────────────────────────────────────────────────────
+// PDF.js
 let pdfjsOk=false;
+
 async function loadPdfLib(){
   if(pdfjsOk || window.pdfjsLib){
     pdfjsOk=true;
@@ -343,6 +342,7 @@ async function loadPdfLib(){
     "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
   pdfjsOk=true;
 }
+
 async function extractPdf(file){
   await loadPdfLib();
   const pdf=await window.pdfjsLib.getDocument({ data: await file.arrayBuffer() }).promise;
@@ -359,7 +359,7 @@ async function extractPdf(file){
   return { text:t.slice(0,130000), pages:pdf.numPages };
 }
 
-// ─── Claude ───────────────────────────────────────────────────────────────────
+// Claude
 async function callClaude(apiKey,system,messages,maxTok=1200){
   const r=await fetch("https://api.anthropic.com/v1/messages",{
     method:"POST",
@@ -406,7 +406,7 @@ ${(texts[b.id] || "").slice(0,Math.max(per,1500))}`;
 
 const sysSummary=title=>`Leia o trecho do livro "${title}" e escreva um resumo em 3 frases em português: (1) do que trata, (2) para quem é ideal, (3) principal aprendizado. Apenas as 3 frases, sem introdução.`;
 
-// ─── Theme ────────────────────────────────────────────────────────────────────
+// Theme
 const C = {
   bg:"#f7f5f2", surf:"#ffffff", card:"#f0ede8", cardH:"#e8e4de",
   border:"#e2ddd7", borderL:"#ece9e4",
@@ -423,12 +423,13 @@ const C = {
 const SPINES=["#1e4a72","#522870","#7a2020","#1a5c3a","#6e5010","#1e3e70","#6e2050","#2e5c10","#5a5010","#1a5c58"];
 const spineC=id=>SPINES[Math.abs(String(id).split("").reduce((a,c)=>a+c.charCodeAt(0),0)) % SPINES.length];
 
-// ─── Icons ────────────────────────────────────────────────────────────────────
+// Icons
 const Ico=({d,sz=16,col,style={}})=>(
   <svg width={sz} height={sz} viewBox="0 0 24 24" fill="none" stroke={col||"currentColor"} strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" style={style}>
     <path d={d}/>
   </svg>
 );
+
 const D = {
   book:"M4 19.5A2.5 2.5 0 0 1 6.5 17H20M4 4.5A2.5 2.5 0 0 1 6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5z",
   up:"M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12",
@@ -447,8 +448,15 @@ const D = {
   dl:"M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3",
   home:"M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2zM9 22V12h6v10",
   heart:"M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z",
-  link:"M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71M14 11a5 5 0 0
-  // Base styles
+  link:"M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71",
+  list:"M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01",
+  chat:"M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z",
+  user:"M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2M12 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8z",
+  chevDown:"M6 9l6 6 6-6",
+  play:"M5 3l14 9-14 9V3z",
+  save:"M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2zM17 21v-8H7v8M7 3v5h8",
+};
+// Base styles
 const ov = {
   position:"fixed", inset:0, background:"rgba(10,20,40,.55)",
   display:"flex", alignItems:"center", justifyContent:"center",
@@ -795,7 +803,7 @@ function NoteCard({note,onEdit,onDelete,readonly=false,ownerName=""}){
     </div>
   );
 }
-// Notes Panel
+  // Notes Panel
 function NotesPanel({dirHandle,bookId,profileId,otherProfiles,onNotesPresenceChange}){
   const [myNotes,setMyNotes]=useState([]);
   const [saved,setSaved]=useState(true);
