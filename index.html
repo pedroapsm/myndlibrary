@@ -1,3 +1,4 @@
+
 <!DOCTYPE html>
 <html lang="pt-BR">
 <head>
@@ -348,7 +349,7 @@ function detectPdfQuality(text="", pages=0){
   const clean = trimStr(text);
   const compact = clean.replace(/\s+/g, " ");
   const chars = compact.length;
-  const weirdMatches = compact.match(/[�□■▪◆◼◻]+/g) || [];
+  const weirdMatches = compact.match(/[â€œÃ¢â‚¬□■▪◆◼◻]+/g) || [];
   const weirdRatio = chars ? weirdMatches.join("").length / chars : 0;
   const avgCharsPerPage = pages ? chars / pages : chars;
 
@@ -905,6 +906,7 @@ function Toasts({items,onRemove}){
 }
 
 // ─── Suggestion Chips ─────────────────────────────────
+// AJUSTE 1: onSelect agora é chamado diretamente com o item ao clicar
 
 function SuggestionChips({items,onSelect,variant="default"}){
   const isGlobal = variant === "global";
@@ -921,10 +923,10 @@ function SuggestionChips({items,onSelect,variant="default"}){
             padding:isGlobal ? "6px 12px" : "6px 12px",
             borderRadius:6,
             border:`1px solid ${C.border}`,
-            background:isGlobal ? "none" : "none",
+            background:"none",
             color:C.inkD,
             cursor:"pointer",
-            fontWeight:isGlobal ? 500 : 500,
+            fontWeight:500,
             transition:"background .18s, border-color .18s, transform .18s"
           }}
           onMouseEnter={e=>{
@@ -1529,7 +1531,8 @@ function NotesPanel({dirHandle,bookId,profileId,otherProfiles,onNotesPresenceCha
     </div>
   );
 }
-  // ─── ChatArea ──────────────────────────────────────────
+
+// ─── ChatArea ──────────────────────────────────────────
 
 function ChatArea({messages,loading,onSend,placeholder,emptyNode,onExport}){
   const [input,setInput]=useState("");
@@ -1572,17 +1575,17 @@ function ChatArea({messages,loading,onSend,placeholder,emptyNode,onExport}){
             key={i}
             style={{
               display:"flex",
-              gap:12,
+              gap:10,
               flexDirection:m.role==="user" ? "row-reverse" : "row",
               alignSelf:m.role==="user" ? "flex-end" : "flex-start",
-              maxWidth:780
+              maxWidth:720
             }}
           >
             <div
               style={{
-                width:34,height:34,minWidth:34,borderRadius:"50%",
+                width:28,height:28,minWidth:28,borderRadius:"50%",
                 display:"flex",alignItems:"center",justifyContent:"center",
-                fontSize:13,marginTop:3,
+                fontSize:11,marginTop:2,
                 background:m.role==="user"?"rgba(45,107,228,.12)":"rgba(122,90,26,.1)",
                 color:m.role==="user"?C.accent:C.gold,fontWeight:700
               }}
@@ -1590,12 +1593,13 @@ function ChatArea({messages,loading,onSend,placeholder,emptyNode,onExport}){
               {m.role==="user" ? m.av : "✦"}
             </div>
 
+            {/* AJUSTE 7: padding reduzido de 13px/16px para 8px/12px */}
             <div
               style={{
-                padding:"13px 16px",
-                borderRadius:9,
-                fontSize:15,
-                lineHeight:1.7,
+                padding:"8px 12px",
+                borderRadius:8,
+                fontSize:14,
+                lineHeight:1.65,
                 whiteSpace:"pre-wrap",
                 background:m.role==="user" ? "#eaf0fb" : C.card,
                 border:`1px solid ${m.role==="user"?C.accentBrd:C.border}`,
@@ -1608,13 +1612,13 @@ function ChatArea({messages,loading,onSend,placeholder,emptyNode,onExport}){
         ))}
 
         {loading && (
-          <div style={{display:"flex",gap:12,alignSelf:"flex-start"}}>
-            <div style={{width:34,height:34,borderRadius:"50%",background:"rgba(122,90,26,.1)",display:"flex",alignItems:"center",justifyContent:"center",color:C.gold,fontSize:16}}>
+          <div style={{display:"flex",gap:10,alignSelf:"flex-start"}}>
+            <div style={{width:28,height:28,borderRadius:"50%",background:"rgba(122,90,26,.1)",display:"flex",alignItems:"center",justifyContent:"center",color:C.gold,fontSize:14}}>
               ✦
             </div>
-            <div style={{padding:"16px 20px",borderRadius:9,background:C.card,border:`1px solid ${C.border}`,display:"flex",gap:6,alignItems:"center"}}>
+            <div style={{padding:"10px 14px",borderRadius:8,background:C.card,border:`1px solid ${C.border}`,display:"flex",gap:6,alignItems:"center"}}>
               {[0,1,2].map(i=>(
-                <span key={i} style={{width:8,height:8,borderRadius:"50%",background:C.gold,display:"inline-block",animation:`bob .9s ${i*.2}s infinite`}}/>
+                <span key={i} style={{width:7,height:7,borderRadius:"50%",background:C.gold,display:"inline-block",animation:`bob .9s ${i*.2}s infinite`}}/>
               ))}
             </div>
           </div>
@@ -1952,7 +1956,21 @@ function HomePage({
                       <div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"nowrap"}}>
                         <button onClick={()=>onOpenBook(b)} style={{...bI,padding:"4px 8px",fontSize:12,fontWeight:600,color:C.inkD}}>Abrir</button>
                         <button onClick={()=>onEditBook(b)} style={{...bI,padding:"4px 6px"}}><Ico d={D.edit} sz={13}/></button>
-                        <button onClick={()=>onDeleteBook(b)} style={{...bI,padding:"4px 6px",color:C.red,borderColor:C.red+"44"}}><Ico d={D.trash} sz={13}/></button>
+                        {/* AJUSTE 5: botão excluir da tabela fica vermelho no hover */}
+                        <button
+                          onClick={()=>onDeleteBook(b)}
+                          style={{...bI,padding:"4px 6px",color:C.red,borderColor:C.red+"44",transition:"background .15s, color .15s, border-color .15s"}}
+                          onMouseEnter={e=>{
+                            e.currentTarget.style.background = "rgba(122,30,30,.08)";
+                            e.currentTarget.style.borderColor = C.red;
+                          }}
+                          onMouseLeave={e=>{
+                            e.currentTarget.style.background = "none";
+                            e.currentTarget.style.borderColor = C.red+"44";
+                          }}
+                        >
+                          <Ico d={D.trash} sz={13}/>
+                        </button>
                       </div>
                     </td>
                   </tr>
@@ -2178,7 +2196,8 @@ function ProfileSwitcher({userName,onSwitch,profiles=[]}){
     </div>
   );
 }
-  // ─── Sidebar ──────────────────────────────────────────
+
+// ─── Sidebar ──────────────────────────────────────────
 
 function Sidebar({
   dirHandle,
@@ -2209,16 +2228,6 @@ function Sidebar({
   onDeleteBook
 }){
   const booksScrollRef=useRef(null);
-  const [scrollPad,setScrollPad]=useState(8);
-
-  useEffect(()=>{
-    const el = booksScrollRef.current;
-    if(!el) return;
-    const pad = Math.max(el.offsetWidth - el.clientWidth, 8);
-    setScrollPad(pad);
-  },[filteredBooks.length, books.length]);
-
-  const sidebarRightPad = scrollPad + 6;
 
   return(
     <aside
@@ -2330,16 +2339,18 @@ function Sidebar({
         )}
 
         <div>
-          <div style={{...sbLb,marginBottom:6,display:"flex",alignItems:"center",justifyContent:"space-between",paddingRight:sidebarRightPad}}>
+          {/* AJUSTE 3: header de categorias sem paddingRight fixo, botão editar e contagem ficam à direita naturalmente */}
+          <div style={{...sbLb,marginBottom:6,display:"flex",alignItems:"center",justifyContent:"space-between"}}>
             <span style={{display:"flex",alignItems:"center",gap:4}}><Ico d={D.list} sz={10}/> Categorias</span>
-            <button onClick={()=>setModal({type:"cats"})} title="Gerenciar categorias" style={{background:"none",border:"none",cursor:"pointer",color:C.sbInk,display:"flex",padding:2,marginRight:2}}>
+            <button onClick={()=>setModal({type:"cats"})} title="Gerenciar categorias" style={{background:"none",border:"none",cursor:"pointer",color:C.sbInk,display:"flex",padding:2}}>
               <Ico d={D.edit} sz={11}/>
             </button>
           </div>
 
+          {/* AJUSTE 3: categorias sem paddingRight fixo, scroll alinhado com a lista de livros */}
           <div
             className="inner-scroll"
-            style={{display:"flex",flexDirection:"column",gap:1,maxHeight:170,overflowY:"auto",paddingRight:sidebarRightPad}}
+            style={{display:"flex",flexDirection:"column",gap:1,maxHeight:170,overflowY:"auto"}}
           >
             {["Todas", ...cats].map(cat=>{
               const active = (cat==="Todas" && !selectedCategory) || (cat!=="Todas" && selectedCategory===cat);
@@ -2364,7 +2375,7 @@ function Sidebar({
                   }}
                 >
                   <span>{cat}</span>
-                  <span style={{fontSize:10,color:C.sbInkF,marginRight:2}}>
+                  <span style={{fontSize:10,color:C.sbInkF}}>
                     {count===0 ? "–" : count}
                   </span>
                 </button>
@@ -2387,14 +2398,24 @@ function Sidebar({
         )}
       </div>
 
-      <div style={{padding:"10px 11px 6px",borderBottom:`1px solid ${C.sbBorder}`,flexShrink:0}}>
-        <div style={{...sbLb,display:"flex",alignItems:"center",gap:4,paddingRight:sidebarRightPad}}>
-          <Ico d={D.book} sz={10}/> Biblioteca
+      {/* AJUSTE 2: removida a linha separadora antes de "Biblioteca", apenas label inline */}
+      <div style={{padding:"8px 11px 4px",flexShrink:0}}>
+        {/* AJUSTE 6: contador de resultados */}
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+          <div style={{...sbLb,display:"flex",alignItems:"center",gap:4}}>
+            <Ico d={D.book} sz={10}/> Biblioteca
+          </div>
+          {hasActiveFilter && filteredBooks.length !== books.length && (
+            <span style={{fontSize:10,color:C.sbInkF,fontWeight:600}}>
+              {filteredBooks.length} de {books.length}
+            </span>
+          )}
         </div>
       </div>
 
-      <div ref={booksScrollRef} className="inner-scroll" style={{flex:1,minHeight:0,overflowY:"auto",padding:"8px 9px 12px"}}>
-        {filteredBooks.map((b, idx)=>{
+      {/* AJUSTE 4: animação de livros mais fluida com CSS transition em vez de animation keyframe por índice */}
+      <div ref={booksScrollRef} className="inner-scroll" style={{flex:1,minHeight:0,overflowY:"auto",padding:"6px 9px 12px"}}>
+        {filteredBooks.map((b)=>{
           const isActive = selBook?.id===b.id && screen==="book";
           return (
             <div
@@ -2412,9 +2433,14 @@ function Sidebar({
                 background:isActive ? C.sbSurfStrong : "none",
                 marginBottom:2,
                 boxShadow:isActive ? "inset 0 0 0 1px rgba(255,255,255,.05)" : "none",
-                opacity:1,
-                transform:"translateY(0)",
-                animation:`sidebarFadeIn .16s ease ${Math.min(idx, 8) * 0.015}s both`
+                transition:"background .18s ease, border-color .18s ease, opacity .18s ease",
+                opacity:1
+              }}
+              onMouseEnter={e=>{
+                if(!isActive) e.currentTarget.style.background = "rgba(255,255,255,.05)";
+              }}
+              onMouseLeave={e=>{
+                if(!isActive) e.currentTarget.style.background = "none";
               }}
             >
               <div style={{width:5,minWidth:5,borderRadius:3,background:spineC(b.id)}}/>
@@ -2462,6 +2488,7 @@ function Sidebar({
                     {b._hasNotes && <div style={{fontSize:10,color:"#c7e4ff"}}>Notas</div>}
                   </div>
 
+                  {/* AJUSTE 5: botão excluir da sidebar fica vermelho no hover */}
                   <button
                     onClick={(e)=>{
                       e.stopPropagation();
@@ -2478,10 +2505,21 @@ function Sidebar({
                       display:"flex",
                       alignItems:"center",
                       gap:4,
-                      flexShrink:0
+                      flexShrink:0,
+                      transition:"background .15s, color .15s, border-color .15s"
+                    }}
+                    onMouseEnter={e=>{
+                      e.currentTarget.style.background = "rgba(200,50,50,.25)";
+                      e.currentTarget.style.borderColor = "rgba(220,80,80,.6)";
+                      e.currentTarget.style.color = "#ff9090";
+                    }}
+                    onMouseLeave={e=>{
+                      e.currentTarget.style.background = "none";
+                      e.currentTarget.style.borderColor = "rgba(255,255,255,.16)";
+                      e.currentTarget.style.color = "rgba(255,255,255,.72)";
                     }}
                   >
-                    <Ico d={D.trash} sz={11} col="rgba(255,255,255,.72)"/> Excluir
+                    <Ico d={D.trash} sz={11} col="currentColor"/> Excluir
                   </button>
                 </div>
               </div>
@@ -2865,7 +2903,8 @@ function Library({dirHandle,apiKey,userName:initUser}){
     localStorage.removeItem(`mynd_lastChat_${book.id}`);
     pushToast("Livro excluído");
   };
-    const saveCats=async(payload)=>{
+
+  const saveCats=async(payload)=>{
     const normalized = normalizeCategories(payload?.categories || []);
     const renameMap = payload?.renameMap || {};
     const validSet = new Set(normalized);
@@ -3158,6 +3197,7 @@ function Library({dirHandle,apiKey,userName:initUser}){
     await persist(nb,cats,wishlist,profiles);
   };
 
+  // AJUSTE 1: suggestion chips chamam diretamente sendBook/sendGlobal
   const bookSuggestionItems = [
     "Qual é o tema central?",
     "Faça um resumo",
@@ -3366,7 +3406,6 @@ function Library({dirHandle,apiKey,userName:initUser}){
 
       <style>{`
         @keyframes bob{0%,60%,100%{transform:translateY(0)}30%{transform:translateY(-6px)}}
-        @keyframes sidebarFadeIn{from{opacity:.0;transform:translateY(4px)}to{opacity:1;transform:translateY(0)}}
 
         .inner-scroll{
           scrollbar-width: thin;
