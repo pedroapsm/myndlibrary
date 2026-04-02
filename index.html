@@ -2337,7 +2337,7 @@ function Sidebar({
           </div>
         )}
 
-        <div style={{overflow:"hidden"}}>
+        <div>
           <div style={{...sbLb,marginBottom:6,display:"flex",alignItems:"center",justifyContent:"space-between"}}>
             <span style={{display:"flex",alignItems:"center",gap:4}}><Ico d={D.list} sz={10}/> Categorias</span>
             <button onClick={()=>setModal({type:"cats"})} title="Gerenciar categorias" style={{background:"none",border:"none",cursor:"pointer",color:C.sbInk,display:"flex",padding:2}}>
@@ -3429,12 +3429,12 @@ function Library({dirHandle,apiKey,userName:initUser}){
 
         .sidebar-shell .inner-scroll{
           scrollbar-color: rgba(255,255,255,.18) transparent;
-          scrollbar-gutter: stable;
+          overflow: overlay;
         }
 
         .sidebar-shell .inner-scroll::-webkit-scrollbar{
-          width: 8px;
-          height: 8px;
+          width: 6px;
+          height: 6px;
         }
 
         .sidebar-shell .inner-scroll::-webkit-scrollbar-track{
