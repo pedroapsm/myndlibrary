@@ -1543,7 +1543,7 @@ function ModeToggle({mode, setMode, deepDisabled}){
   const [tooltip,setTooltip]=useState(null);
 
   return(
-    <div style={{display:"flex",gap:4,alignItems:"center",marginBottom:8,position:"relative"}}>
+    <div style={{display:"flex",gap:4,alignItems:"center",marginBottom:8,position:"relative",zIndex:10}}>
       {[
         {id:"basic", label:"⚡ Básico"},
         {id:"deep",  label:"🔍 Profundo", disabled:deepDisabled}
@@ -1571,21 +1571,34 @@ function ModeToggle({mode, setMode, deepDisabled}){
           </button>
           {tooltip===id && (
             <div style={{
-              position:"absolute",
-              bottom:"calc(100% + 6px)",
-              left:"50%",
-              transform:"translateX(-50%)",
-              background:"#1a2d45",
+              position:"fixed",
+              bottom:"auto",
+              left:"auto",
+              background:"#223858",
+              border:"1px solid #2d4a6e",
               color:"#fff",
               fontSize:12,
               lineHeight:1.5,
               padding:"7px 11px",
               borderRadius:7,
               whiteSpace:"nowrap",
-              zIndex:50,
-              boxShadow:"0 4px 16px rgba(0,0,0,.22)",
-              pointerEvents:"none"
-            }}>
+              zIndex:500,
+              boxShadow:"0 4px 16px rgba(0,0,0,.28)",
+              pointerEvents:"none",
+              transform:"translateY(-8px)",
+              marginBottom:6
+            }}
+            ref={el=>{
+              if(el){
+                const btn = el.previousSibling;
+                if(btn){
+                  const r = btn.getBoundingClientRect();
+                  el.style.top = (r.top - el.offsetHeight - 10) + "px";
+                  el.style.left = (r.left + r.width/2 - el.offsetWidth/2) + "px";
+                }
+              }
+            }}
+            >
               {disabled ? "PDF não disponível para este livro" : MODE_TOOLTIPS[id]}
               <div style={{
                 position:"absolute",
@@ -1595,7 +1608,7 @@ function ModeToggle({mode, setMode, deepDisabled}){
                 width:0,height:0,
                 borderLeft:"5px solid transparent",
                 borderRight:"5px solid transparent",
-                borderTop:"5px solid #1a2d45"
+                borderTop:"5px solid #223858"
               }}/>
             </div>
           )}
@@ -2933,6 +2946,9 @@ function Library({dirHandle,apiKey,userName:initUser}){
   };
 
   const doEdit=async(fd)=>{
+    const targetBook = editBook || selBook;
+    if(!targetBook) return;
+
     const normalizedCategory = normalizeCategory(fd.category);
     const nextCats = normalizedCategory && !cats.includes(normalizedCategory)
       ? [...cats, normalizedCategory]
@@ -2943,10 +2959,10 @@ function Library({dirHandle,apiKey,userName:initUser}){
     const finalCategory = nextCats.includes(normalizedCategory) ? normalizedCategory : "";
     const nextTags = normalizeTags(fd.tags);
 
-    const nb=books.map(b=>b.id===editBook.id ? {...b,...fd,category:finalCategory,tags:nextTags} : b);
+    const nb=books.map(b=>b.id===targetBook.id ? {...b,...fd,category:finalCategory,tags:nextTags} : b);
     setBooks(nb);
 
-    if(selBook?.id===editBook.id){
+    if(selBook?.id===targetBook.id){
       setSelBook(p=>({...p,...fd,category:finalCategory,tags:nextTags}));
     }
 
