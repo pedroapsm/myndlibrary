@@ -91,6 +91,12 @@ const CATEGORY_FIX_MAP = {
   "Autoajuda":"Autoajuda"
 };
 
+const CHUNK_SIZE = 1800;
+const CHUNK_OVERLAP = 220;
+const MAX_BOOK_CONTEXT_CHUNKS = 8;
+const MAX_GLOBAL_BOOKS = 4;
+const MAX_GLOBAL_CHUNKS_PER_BOOK = 4;
+
 // ─── Utils ─────────────────────────────────────────────
 
 const uid = () => (
@@ -220,6 +226,146 @@ function catStyle(category){
     "Arte e Cultura": { bg:"rgba(184, 77, 139, .10)", brd:"rgba(184,77,139,.28)", ink:"#ab4b82" }
   };
   return map[category] || { bg:"rgba(45,107,228,.08)", brd:"rgba(45,107,228,.25)", ink:"#2d6be4" };
+}
+
+function escapeRegExp(str=""){
+  return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function tokenizeQuery(query=""){
+  return trimStr(query)
+    .toLocaleLowerCase("pt-BR")
+    .replace(/[^\p{L}\p{N}\s]+/gu, " ")
+    .split(/\s+/)
+    .filter(w => w && w.length > 2);
+}
+
+function splitTextIntoChunks(text="", size=CHUNK_SIZE, overlap=CHUNK_OVERLAP){
+  const clean = trimStr(text);
+  if(!clean) return [];
+
+  const chunks = [];
+  let start = 0;
+  let idx = 0;
+
+  while(start < clean.length){
+    const end = Math.min(start + size, clean.length);
+    const content = clean.slice(start, end).trim();
+    if(content){
+      chunks.push({
+        id:`chunk_${idx}`,
+        index: idx,
+        start,
+        end,
+        content
+      });
+      idx += 1;
+    }
+    if(end >= clean.length) break;
+    start = Math.max(end - overlap, start + 1);
+  }
+
+  return chunks;
+}
+
+function scoreChunkAgainstQuery(query="", text=""){
+  const q = trimStr(query);
+  const body = trimStr(text);
+  if(!q || !body) return 0;
+
+  const lowerText = body.toLocaleLowerCase("pt-BR");
+  const tokens = uniqueCaseInsensitive(tokenizeQuery(q));
+  if(!tokens.length) return 0;
+
+  let score = 0;
+
+  for(const token of tokens){
+    const re = new RegExp(`\\b${escapeRegExp(token)}\\b`, "giu");
+    const matches = lowerText.match(re);
+    if(matches) score += matches.length * 4;
+    else if(lowerText.includes(token)) score += 1.5;
+  }
+
+  const phrase = q.toLocaleLowerCase("pt-BR");
+  if(lowerText.includes(phrase)) score += 10;
+
+  return score;
+}
+
+function selectRelevantChunks(text="", query="", maxChunks=MAX_BOOK_CONTEXT_CHUNKS){
+  const chunks = splitTextIntoChunks(text);
+  if(!chunks.length) return [];
+
+  const q = trimStr(query);
+  if(!q){
+    return chunks.slice(0, maxChunks);
+  }
+
+  const scored = chunks
+    .map(chunk=>({
+      ...chunk,
+      score: scoreChunkAgainstQuery(q, chunk.content)
+    }))
+    .sort((a,b)=>{
+      if(b.score !== a.score) return b.score - a.score;
+      return a.index - b.index;
+    });
+
+  const best = scored.slice(0, maxChunks).sort((a,b)=>a.index - b.index);
+  return best.length ? best : chunks.slice(0, maxChunks);
+}
+
+function selectRelevantBooks(query="", books=[], texts={}, limit=MAX_GLOBAL_BOOKS){
+  const q = trimStr(query);
+  if(!books.length) return [];
+
+  const scored = books.map(book=>{
+    const haystack = [
+      book.title || "",
+      book.author || "",
+      book.category || "",
+      (book.tags || []).join(" "),
+      book.summary || "",
+      (texts[book.id] || "").slice(0, 12000)
+    ].join("\n");
+
+    return {
+      book,
+      score: q ? scoreChunkAgainstQuery(q, haystack) : 0
+    };
+  });
+
+  scored.sort((a,b)=>{
+    if(b.score !== a.score) return b.score - a.score;
+    return (a.book.title || "").localeCompare(b.book.title || "", "pt-BR");
+  });
+
+  const top = scored.slice(0, limit).map(x=>x.book);
+  return top.length ? top : books.slice(0, limit);
+}
+
+function detectPdfQuality(text="", pages=0){
+  const clean = trimStr(text);
+  const compact = clean.replace(/\s+/g, " ");
+  const chars = compact.length;
+  const weirdMatches = compact.match(/[�□■▪◆◼◻]+/g) || [];
+  const weirdRatio = chars ? weirdMatches.join("").length / chars : 0;
+  const avgCharsPerPage = pages ? chars / pages : chars;
+
+  const flags = [];
+  if(chars < 1200) flags.push("Texto extraído muito curto");
+  if(pages >= 8 && avgCharsPerPage < 250) flags.push("Baixa densidade de texto por página");
+  if(weirdRatio > 0.015) flags.push("Caracteres estranhos detectados");
+
+  return {
+    isSuspect: flags.length > 0,
+    flags,
+    stats: {
+      chars,
+      avgCharsPerPage: Math.round(avgCharsPerPage),
+      weirdRatio
+    }
+  };
 }
 
 // ─── IndexedDB ────────────────────────────────────────
@@ -465,9 +611,8 @@ async function extractPdf(file){
     const c = await page.getTextContent();
     t += c.items.map(x=>x.str).join(" ") + "\n";
     if(i % 2 === 0) await new Promise(r=>setTimeout(r,0));
-    if(t.length > 130000) break;
   }
-  return { text:t.slice(0,130000), pages:pdf.numPages };
+  return { text:t.trim(), pages:pdf.numPages };
 }
 
 // ─── Claude ───────────────────────────────────────────
@@ -495,26 +640,40 @@ async function callClaude(apiKey,system,messages,maxTok=1200){
   return (await r.json()).content?.[0]?.text || "Sem resposta.";
 }
 
-const sysBook=(title,text)=>`Você é um assistente literário especializado no livro "${title}". Responda APENAS com base no conteúdo abaixo. Não use conhecimento externo. Se não encontrar, diga claramente. Responda em português e cite trechos quando útil.
+function buildBookContextPrompt(title, query, chunks){
+  const excerpts = chunks.map((chunk, idx)=>(
+    `[Trecho ${idx+1} | posição ${chunk.start}-${chunk.end}]\n${chunk.content}`
+  )).join("\n\n");
 
-CONTEÚDO:
-${text.slice(0,85000)}`;
+  return `Você é um assistente literário especializado no livro "${title}". Responda APENAS com base nos trechos abaixo. Não use conhecimento externo. Se a resposta não estiver clara nos trechos, diga isso explicitamente. Responda em português e, quando útil, cite os números dos trechos usados.
 
-const sysGlobal=(books,texts)=>{
-  const per = books.length ? Math.floor(74000/books.length) : 0;
-  let s = `Você é um assistente com acesso à biblioteca completa (${books.length} livros). Sempre indique de qual livro vem a informação. Use APENAS o conteúdo abaixo. Responda em português.
+PERGUNTA:
+${query}
 
-BIBLIOTECA:`;
-  for(const b of books){
-    s += `
+TRECHOS RELEVANTES:
+${excerpts}`;
+}
 
+function buildGlobalContextPrompt(query, entries){
+  const body = entries.map((entry, bookIdx)=>{
+    const chunkText = entry.chunks.map((chunk, idx)=>(
+      `[Livro ${bookIdx+1} | Trecho ${idx+1} | posição ${chunk.start}-${chunk.end}]\n${chunk.content}`
+    )).join("\n\n");
+
+    return `${"─".repeat(48)}
+📖 ${entry.book.title}${entry.book.author?` | ${entry.book.author}`:""}${entry.book.category?` [${entry.book.category}]`:""}
 ${"─".repeat(48)}
-📖 ${b.title}${b.author?` | ${b.author}`:""}${b.category?` [${b.category}]`:""}
-${"─".repeat(48)}
-${(texts[b.id] || "").slice(0,Math.max(per,1500))}`;
-  }
-  return s;
-};
+${chunkText}`;
+  }).join("\n\n");
+
+  return `Você é um assistente com acesso à biblioteca do usuário. Responda APENAS com base nos livros e trechos abaixo. Sempre deixe claro de qual livro vem cada informação. Se não houver base suficiente, diga isso claramente. Responda em português.
+
+PERGUNTA:
+${query}
+
+BIBLIOTECA SELECIONADA:
+${body}`;
+}
 
 const sysSummary=title=>`Leia o trecho do livro "${title}" e escreva um resumo em 3 frases em português: (1) do que trata, (2) para quem é ideal, (3) principal aprendizado. Apenas as 3 frases, sem introdução.`;
 
@@ -725,14 +884,14 @@ function Toasts({items,onRemove}){
             padding:"11px 14px",
             boxShadow:"0 12px 30px rgba(0,0,0,.2)",
             minWidth:220,
-            maxWidth:360,
+            maxWidth:420,
             display:"flex",
             alignItems:"center",
             justifyContent:"space-between",
             gap:10
           }}
         >
-          <span style={{fontSize:13.5,lineHeight:1.4}}>{t.text}</span>
+          <span style={{fontSize:13.5,lineHeight:1.4,whiteSpace:"pre-wrap"}}>{t.text}</span>
           <button
             onClick={()=>onRemove(t.id)}
             style={{background:"none",border:"none",cursor:"pointer",color:"rgba(255,255,255,.75)",display:"flex"}}
@@ -745,9 +904,50 @@ function Toasts({items,onRemove}){
   );
 }
 
+// ─── Suggestion Chips ─────────────────────────────────
+
+function SuggestionChips({items,onSelect,variant="default"}){
+  const isGlobal = variant === "global";
+
+  return(
+    <div style={{display:"flex",flexWrap:"wrap",gap:9,marginTop:14}}>
+      {items.map(item=>(
+        <button
+          key={item}
+          type="button"
+          onClick={()=>onSelect(item)}
+          style={{
+            fontSize:13,
+            padding:isGlobal ? "6px 12px" : "6px 12px",
+            borderRadius:6,
+            border:`1px solid ${C.border}`,
+            background:isGlobal ? "none" : "none",
+            color:C.inkD,
+            cursor:"pointer",
+            fontWeight:isGlobal ? 500 : 500,
+            transition:"background .18s, border-color .18s, transform .18s"
+          }}
+          onMouseEnter={e=>{
+            e.currentTarget.style.background = C.card;
+            e.currentTarget.style.borderColor = C.accentBrd;
+            e.currentTarget.style.transform = "translateY(-1px)";
+          }}
+          onMouseLeave={e=>{
+            e.currentTarget.style.background = "none";
+            e.currentTarget.style.borderColor = C.border;
+            e.currentTarget.style.transform = "translateY(0)";
+          }}
+        >
+          {item}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 // ─── BookModal ─────────────────────────────────────────
 
-function BookModal({mode,initial,categories,onSave,onClose,uploading,prog,err}){
+function BookModal({mode,initial,categories,onSave,onClose,uploading,prog,err,qualityAlert}){
   const [d,setD]=useState({
     title:"",
     author:"",
@@ -818,6 +1018,21 @@ function BookModal({mode,initial,categories,onSave,onClose,uploading,prog,err}){
           <div style={{...lb,marginBottom:6}}>Tags</div>
           <TagInput tags={d.tags} onChange={t=>set("tags",t)} />
         </div>
+
+        {!!qualityAlert && (
+          <div style={{
+            marginBottom:14,
+            background:"rgba(201,95,46,.08)",
+            border:"1px solid rgba(201,95,46,.25)",
+            borderRadius:8,
+            padding:"10px 12px"
+          }}>
+            <div style={{...lb,color:"#b35728",marginBottom:6}}>Alerta de qualidade do PDF</div>
+            <div style={{fontSize:13.5,color:C.inkD,lineHeight:1.55}}>
+              {qualityAlert}
+            </div>
+          </div>
+        )}
 
         {uploading && (
           <div style={{marginBottom:12}}>
@@ -1070,13 +1285,20 @@ function WishModal({item,onSave,onClose}){
     </div>
   );
 }
-  // ─── Note Card ────────────────────────────────────────
+
+// ─── Note Card ────────────────────────────────────────
 
 function NoteCard({note,onEdit,onDelete,readonly=false,ownerName=""}){
   return(
-    <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:8,padding:"10px 12px",marginBottom:8}}>
+    <div style={{
+      background:readonly ? "#f8f2e8" : C.card,
+      border:`1px solid ${readonly ? "rgba(122,90,26,.22)" : C.border}`,
+      borderRadius:8,
+      padding:"10px 12px",
+      marginBottom:8
+    }}>
       {ownerName && (
-        <div style={{...lb,color:C.gold,marginBottom:6,fontSize:10}}>
+        <div style={{...lb,color:readonly ? C.gold : C.accent,marginBottom:6,fontSize:10}}>
           {ownerName}
         </div>
       )}
@@ -1307,8 +1529,7 @@ function NotesPanel({dirHandle,bookId,profileId,otherProfiles,onNotesPresenceCha
     </div>
   );
 }
-
-// ─── ChatArea ──────────────────────────────────────────
+  // ─── ChatArea ──────────────────────────────────────────
 
 function ChatArea({messages,loading,onSend,placeholder,emptyNode,onExport}){
   const [input,setInput]=useState("");
@@ -1649,7 +1870,7 @@ function HomePage({
                   ["pages","Páginas",{width:"78px"}],
                   ["category","Categoria",{width:"15%"}],
                   ["tags","Tags",{width:"18%"}],
-                  ["addedAt","Data",{width:"96px"}]
+                  ["addedAt","Data",{width:"108px"}]
                 ].map(([col,label,extra])=>(
                   <th
                     key={col}
@@ -1677,8 +1898,8 @@ function HomePage({
                 ))}
                 <th style={{
                   position:"sticky",top:0,zIndex:2,background:C.surf,textAlign:"left",
-                  padding:"10px 12px",color:C.inkD,fontWeight:700,fontSize:12,letterSpacing:"0.05em",
-                  whiteSpace:"nowrap",borderBottom:`1px solid ${C.border}`,width:"130px"
+                  padding:"10px 18px 10px 16px",color:C.inkD,fontWeight:700,fontSize:12,letterSpacing:"0.05em",
+                  whiteSpace:"nowrap",borderBottom:`1px solid ${C.border}`,width:"138px"
                 }}>
                   Ações
                 </th>
@@ -1724,10 +1945,10 @@ function HomePage({
                         {truncateText(joinTags(b.tags||[]), 36)}
                       </div>
                     </td>
-                    <td style={{padding:"11px 12px",color:C.inkF,fontSize:13,verticalAlign:"top",whiteSpace:"nowrap"}}>
+                    <td style={{padding:"11px 12px 11px 14px",color:C.inkF,fontSize:13,verticalAlign:"top",whiteSpace:"nowrap"}}>
                       {b.addedAt ? new Date(b.addedAt).toLocaleDateString("pt-BR") : "—"}
                     </td>
-                    <td style={{padding:"11px 12px",verticalAlign:"top"}}>
+                    <td style={{padding:"11px 18px 11px 16px",verticalAlign:"top"}}>
                       <div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"nowrap"}}>
                         <button onClick={()=>onOpenBook(b)} style={{...bI,padding:"4px 8px",fontSize:12,fontWeight:600,color:C.inkD}}>Abrir</button>
                         <button onClick={()=>onEditBook(b)} style={{...bI,padding:"4px 6px"}}><Ico d={D.edit} sz={13}/></button>
@@ -1737,7 +1958,7 @@ function HomePage({
                   </tr>
                 );
               })}
-                            {sorted.length===0 && (
+              {sorted.length===0 && (
                 <tr>
                   <td colSpan="7" style={{padding:"18px 12px"}}>
                     <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:12,flexWrap:"wrap"}}>
@@ -1957,8 +2178,7 @@ function ProfileSwitcher({userName,onSwitch,profiles=[]}){
     </div>
   );
 }
-
-// ─── Sidebar ──────────────────────────────────────────
+  // ─── Sidebar ──────────────────────────────────────────
 
 function Sidebar({
   dirHandle,
@@ -1997,6 +2217,8 @@ function Sidebar({
     const pad = Math.max(el.offsetWidth - el.clientWidth, 8);
     setScrollPad(pad);
   },[filteredBooks.length, books.length]);
+
+  const sidebarRightPad = scrollPad + 6;
 
   return(
     <aside
@@ -2108,16 +2330,16 @@ function Sidebar({
         )}
 
         <div>
-          <div style={{...sbLb,marginBottom:6,display:"flex",alignItems:"center",justifyContent:"space-between",paddingRight:scrollPad}}>
+          <div style={{...sbLb,marginBottom:6,display:"flex",alignItems:"center",justifyContent:"space-between",paddingRight:sidebarRightPad}}>
             <span style={{display:"flex",alignItems:"center",gap:4}}><Ico d={D.list} sz={10}/> Categorias</span>
-            <button onClick={()=>setModal({type:"cats"})} title="Gerenciar categorias" style={{background:"none",border:"none",cursor:"pointer",color:C.sbInk,display:"flex",padding:2}}>
+            <button onClick={()=>setModal({type:"cats"})} title="Gerenciar categorias" style={{background:"none",border:"none",cursor:"pointer",color:C.sbInk,display:"flex",padding:2,marginRight:2}}>
               <Ico d={D.edit} sz={11}/>
             </button>
           </div>
 
           <div
             className="inner-scroll"
-            style={{display:"flex",flexDirection:"column",gap:1,maxHeight:170,overflowY:"auto",paddingRight:scrollPad}}
+            style={{display:"flex",flexDirection:"column",gap:1,maxHeight:170,overflowY:"auto",paddingRight:sidebarRightPad}}
           >
             {["Todas", ...cats].map(cat=>{
               const active = (cat==="Todas" && !selectedCategory) || (cat!=="Todas" && selectedCategory===cat);
@@ -2142,7 +2364,7 @@ function Sidebar({
                   }}
                 >
                   <span>{cat}</span>
-                  <span style={{fontSize:10,color:C.sbInkF}}>
+                  <span style={{fontSize:10,color:C.sbInkF,marginRight:2}}>
                     {count===0 ? "–" : count}
                   </span>
                 </button>
@@ -2150,7 +2372,8 @@ function Sidebar({
             })}
           </div>
         </div>
-                {hasActiveFilter && (
+
+        {hasActiveFilter && (
           <div style={{marginTop:10,paddingTop:10,borderTop:`1px solid ${C.sbBorder}`}}>
             <div style={{display:"flex",alignItems:"center",gap:6,background:"rgba(255,255,255,.1)",border:"1px solid rgba(255,255,255,.18)",borderRadius:6,padding:"6px 10px"}}>
               <span style={{fontSize:12,color:C.sbInk,flex:1}}>
@@ -2165,13 +2388,13 @@ function Sidebar({
       </div>
 
       <div style={{padding:"10px 11px 6px",borderBottom:`1px solid ${C.sbBorder}`,flexShrink:0}}>
-        <div style={{...sbLb,display:"flex",alignItems:"center",gap:4,paddingRight:scrollPad}}>
+        <div style={{...sbLb,display:"flex",alignItems:"center",gap:4,paddingRight:sidebarRightPad}}>
           <Ico d={D.book} sz={10}/> Biblioteca
         </div>
       </div>
 
       <div ref={booksScrollRef} className="inner-scroll" style={{flex:1,minHeight:0,overflowY:"auto",padding:"8px 9px 12px"}}>
-        {filteredBooks.map(b=>{
+        {filteredBooks.map((b, idx)=>{
           const isActive = selBook?.id===b.id && screen==="book";
           return (
             <div
@@ -2188,7 +2411,10 @@ function Sidebar({
                 border:`1px solid ${isActive ? "rgba(255,255,255,.28)" : "transparent"}`,
                 background:isActive ? C.sbSurfStrong : "none",
                 marginBottom:2,
-                boxShadow:isActive ? "inset 0 0 0 1px rgba(255,255,255,.05)" : "none"
+                boxShadow:isActive ? "inset 0 0 0 1px rgba(255,255,255,.05)" : "none",
+                opacity:1,
+                transform:"translateY(0)",
+                animation:`sidebarFadeIn .16s ease ${Math.min(idx, 8) * 0.015}s both`
               }}
             >
               <div style={{width:5,minWidth:5,borderRadius:3,background:spineC(b.id)}}/>
@@ -2326,6 +2552,7 @@ function Library({dirHandle,apiKey,userName:initUser}){
   const [uploading,setUploading] = useState(false);
   const [upProg,setUpProg] = useState(0);
   const [upErr,setUpErr] = useState("");
+  const [uploadQualityAlert,setUploadQualityAlert] = useState("");
   const [userName,setUserName] = useState(initUser);
   const [lastBook,setLastBook] = useState(null);
   const [toasts,setToasts] = useState([]);
@@ -2486,6 +2713,7 @@ function Library({dirHandle,apiKey,userName:initUser}){
       return;
     }
     setPendingFile(f);
+    setUploadQualityAlert("");
     setModal({
       type:"add",
       initial:{
@@ -2503,6 +2731,7 @@ function Library({dirHandle,apiKey,userName:initUser}){
     setUploading(true);
     setUpProg(15);
     setUpErr("");
+    setUploadQualityAlert("");
 
     try{
       const normalizedCategory = normalizeCategory(fd.category);
@@ -2513,6 +2742,11 @@ function Library({dirHandle,apiKey,userName:initUser}){
       if(nextCats !== cats) setCats(nextCats);
 
       const {text,pages}=await extractPdf(pendingFile);
+      const quality = detectPdfQuality(text, pages);
+      if(quality.isSuspect){
+        setUploadQualityAlert(`O PDF pode ter sido extraído com baixa qualidade. ${quality.flags.join(" | ")}`);
+      }
+
       setUpProg(55);
 
       let summary="";
@@ -2543,13 +2777,14 @@ function Library({dirHandle,apiKey,userName:initUser}){
       await persist(nb,nextCats,wishlist,profiles);
 
       setUpProg(100);
-      pushToast("Livro adicionado à biblioteca");
+      pushToast(quality.isSuspect ? "Livro adicionado com alerta de qualidade do PDF" : "Livro adicionado à biblioteca");
 
       setTimeout(()=>{
         setModal(null);
         setPendingFile(null);
         setUploading(false);
         setUpProg(0);
+        setUploadQualityAlert("");
       },500);
     }catch(e){
       setUpErr("Erro: " + e.message);
@@ -2630,8 +2865,7 @@ function Library({dirHandle,apiKey,userName:initUser}){
     localStorage.removeItem(`mynd_lastChat_${book.id}`);
     pushToast("Livro excluído");
   };
-
-  const saveCats=async(payload)=>{
+    const saveCats=async(payload)=>{
     const normalized = normalizeCategories(payload?.categories || []);
     const renameMap = payload?.renameMap || {};
     const validSet = new Set(normalized);
@@ -2848,17 +3082,22 @@ function Library({dirHandle,apiKey,userName:initUser}){
   const mkM=(role,content)=>({role,content,av});
 
   const sendBook=async(txt)=>{
+    if(!selBook) return;
     const next=[...bookMsgs,mkM("user",txt)];
     setBookMsgs(next);
     setChatLoading(true);
+
     try{
-      const r=await callClaude(apiKey,sysBook(selBook.title,bookText),next);
+      const chunks = selectRelevantChunks(bookText, txt, MAX_BOOK_CONTEXT_CHUNKS);
+      const system = buildBookContextPrompt(selBook.title, txt, chunks);
+      const r=await callClaude(apiKey,system,next);
       const final=[...next,mkM("assistant",r)];
       setBookMsgs(final);
       await saveCurrentChat(final);
     }catch(e){
       setBookMsgs(p=>[...p,mkM("assistant","Erro: " + e.message + ". Tente novamente.")]);
     }
+
     setChatLoading(false);
   };
 
@@ -2867,14 +3106,23 @@ function Library({dirHandle,apiKey,userName:initUser}){
     const next=[...globalMsgs,mkM("user",txt)];
     setGlobalMsgs(next);
     setChatLoading(true);
+
     try{
-      const r=await callClaude(apiKey,sysGlobal(books,globalTexts),next);
+      const candidateBooks = selectRelevantBooks(txt, books, globalTexts, MAX_GLOBAL_BOOKS);
+      const entries = candidateBooks.map(book=>({
+        book,
+        chunks: selectRelevantChunks(globalTexts[book.id] || "", txt, MAX_GLOBAL_CHUNKS_PER_BOOK)
+      })).filter(entry=>entry.chunks.length > 0);
+
+      const system = buildGlobalContextPrompt(txt, entries);
+      const r=await callClaude(apiKey,system,next);
       const final=[...next,mkM("assistant",r)];
       setGlobalMsgs(final);
       await saveCurrentGlobalChat(final);
     }catch(e){
       setGlobalMsgs(p=>[...p,mkM("assistant","Erro: " + e.message + ". Tente novamente.")]);
     }
+
     setChatLoading(false);
   };
 
@@ -2910,24 +3158,27 @@ function Library({dirHandle,apiKey,userName:initUser}){
     await persist(nb,cats,wishlist,profiles);
   };
 
+  const bookSuggestionItems = [
+    "Qual é o tema central?",
+    "Faça um resumo",
+    "Principais conceitos",
+    "Quem são os personagens?"
+  ];
+
+  const globalSuggestionItems = [
+    "Quais livros falam sobre estratégia?",
+    "Compare os autores",
+    "Resuma cada livro em uma frase",
+    "Que temas se repetem?"
+  ];
+
   const WelcomeBook=()=>(
     <div style={{background:C.surf,border:`1px solid ${C.border}`,borderRadius:10,padding:"20px 24px"}}>
       <div style={{fontSize:20,fontWeight:700,color:C.accent,marginBottom:8}}>📖 Converse com este livro</div>
       <p style={{fontSize:15,color:C.inkD,lineHeight:1.7}}>
         As respostas são baseadas exclusivamente no texto do livro.
       </p>
-      <div style={{display:"flex",flexWrap:"wrap",gap:9,marginTop:14}}>
-        {["Qual é o tema central?","Faça um resumo","Principais conceitos","Quem são os personagens?"].map(s=>(
-          <button
-            key={s}
-            type="button"
-            onClick={()=>sendBook(s)}
-            style={{fontSize:13,padding:"7px 12px",borderRadius:7,border:`1px solid ${C.border}`,background:C.bg,color:C.inkD,cursor:"pointer",fontWeight:600}}
-          >
-            {s}
-          </button>
-        ))}
-      </div>
+      <SuggestionChips items={bookSuggestionItems} onSelect={sendBook} variant="global" />
     </div>
   );
 
@@ -2941,17 +3192,7 @@ function Library({dirHandle,apiKey,userName:initUser}){
         {globalLoading && <em style={{color:C.inkF}}> Carregando…</em>}
       </p>
       {!globalLoading && books.length>0 && (
-        <div style={{display:"flex",flexWrap:"wrap",gap:9,marginTop:14}}>
-          {["Quais livros falam sobre estratégia?","Compare os autores","Resuma cada livro em uma frase","Que temas se repetem?"].map(s=>(
-            <button
-              key={s}
-              style={{fontSize:13,padding:"6px 12px",borderRadius:6,border:`1px solid ${C.border}`,background:"none",color:C.inkD,cursor:"pointer",fontWeight:500}}
-              onClick={()=>sendGlobal(s)}
-            >
-              {s}
-            </button>
-          ))}
-        </div>
+        <SuggestionChips items={globalSuggestionItems} onSelect={sendGlobal} variant="global" />
       )}
     </div>
   );
@@ -3118,13 +3359,14 @@ function Library({dirHandle,apiKey,userName:initUser}){
       </main>
 
       {modal?.type==="cats" && <CatModal categories={cats} onSave={saveCats} onClose={()=>setModal(null)}/>}
-      {modal?.type==="add" && <BookModal mode="add" initial={modal.initial} categories={cats} onSave={doAdd} onClose={()=>{setModal(null); setPendingFile(null);}} uploading={uploading} prog={upProg} err={upErr}/>}
-      {modal?.type==="edit" && editBook && <BookModal mode="edit" initial={modal.initial} categories={cats} onSave={doEdit} onClose={()=>{setModal(null); setEditBook(null);}} uploading={false} prog={0} err=""/>}
+      {modal?.type==="add" && <BookModal mode="add" initial={modal.initial} categories={cats} onSave={doAdd} onClose={()=>{setModal(null); setPendingFile(null); setUploadQualityAlert("");}} uploading={uploading} prog={upProg} err={upErr} qualityAlert={uploadQualityAlert}/>}
+      {modal?.type==="edit" && editBook && <BookModal mode="edit" initial={modal.initial} categories={cats} onSave={doEdit} onClose={()=>{setModal(null); setEditBook(null);}} uploading={false} prog={0} err="" qualityAlert=""/>}
       {wishModal && <WishModal item={wishEdit} onSave={saveWish} onClose={()=>{setWishModal(false); setWishEdit(null);}}/>}
       <Toasts items={toasts} onRemove={removeToast}/>
 
       <style>{`
         @keyframes bob{0%,60%,100%{transform:translateY(0)}30%{transform:translateY(-6px)}}
+        @keyframes sidebarFadeIn{from{opacity:.0;transform:translateY(4px)}to{opacity:1;transform:translateY(0)}}
 
         .inner-scroll{
           scrollbar-width: thin;
