@@ -2338,9 +2338,9 @@ function Sidebar({
         )}
 
         <div style={{marginRight:-11,paddingRight:0}}>
-          <div style={{...sbLb,marginBottom:6,display:"flex",alignItems:"center",justifyContent:"space-between",paddingRight:11}}>
+          <div style={{...sbLb,marginBottom:6,display:"flex",alignItems:"center",justifyContent:"space-between",paddingRight:13}}>
             <span style={{display:"flex",alignItems:"center",gap:4}}><Ico d={D.list} sz={10}/> Categorias</span>
-            <button onClick={()=>setModal({type:"cats"})} title="Gerenciar categorias" style={{background:"none",border:"none",cursor:"pointer",color:C.sbInk,display:"flex",padding:2}}>
+            <button onClick={()=>setModal({type:"cats"})} title="Gerenciar categorias" style={{background:"none",border:"none",cursor:"pointer",color:C.sbInk,display:"flex",padding:0,lineHeight:1}}>
               <Ico d={D.edit} sz={11}/>
             </button>
           </div>
