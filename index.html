@@ -1959,12 +1959,12 @@ function HomePage({
             <thead>
               <tr style={{borderBottom:`1px solid ${C.border}`}}>
                 {[
-                  ["title","Nome",{width:"29%"}],
-                  ["author","Autor",{width:"19%"}],
-                  ["pages","Páginas",{width:"78px"}],
-                  ["category","Categoria",{width:"15%"}],
-                  ["tags","Tags",{width:"18%"}],
-                  ["addedAt","Data",{width:"108px"}]
+                  ["title","Nome",{width:"28%"}],
+                  ["author","Autor",{width:"15%"}],
+                  ["pages","Páginas",{width:"72px"}],
+                  ["category","Categoria",{width:"14%"}],
+                  ["tags","Tags",{width:"19%"}],
+                  ["addedAt","Data",{width:"96px"}]
                 ].map(([col,label,extra])=>(
                   <th
                     key={col}
@@ -3605,7 +3605,7 @@ function Library({dirHandle,apiKey,userName:initUser}){
 
       {modal?.type==="cats" && <CatModal categories={cats} onSave={saveCats} onClose={()=>setModal(null)}/>}
       {modal?.type==="add" && <BookModal mode="add" initial={modal.initial} categories={cats} onSave={doAdd} onClose={()=>{setModal(null); setPendingFile(null); setUploadQualityAlert("");}} uploading={uploading} prog={upProg} err={upErr} qualityAlert={uploadQualityAlert}/>}
-      {modal?.type==="edit" && editBook && <BookModal mode="edit" initial={modal.initial} categories={cats} onSave={doEdit} onClose={()=>{setModal(null); setEditBook(null);}} uploading={false} prog={0} err="" qualityAlert=""/>}
+      {modal?.type==="edit" && modal.initial && <BookModal mode="edit" initial={modal.initial} categories={cats} onSave={doEdit} onClose={()=>{setModal(null); setEditBook(null);}} uploading={false} prog={0} err="" qualityAlert=""/>}
       {wishModal && <WishModal item={wishEdit} onSave={saveWish} onClose={()=>{setWishModal(false); setWishEdit(null);}}/>}
       <Toasts items={toasts} onRemove={removeToast}/>
 
