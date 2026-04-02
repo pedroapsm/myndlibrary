@@ -4,24 +4,74 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>Mynd Library</title>
+
 <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
 <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
 <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+
 <style>
 * { box-sizing:border-box; margin:0; padding:0; }
-html,body,#root { height:100%; background:#f7f5f2; font-family:'Inter',sans-serif; }
+
+html,body,#root {
+  height:100%;
+  background:#f7f5f2;
+  font-family:'Inter',sans-serif;
+}
+
 body { color:#1a1614; }
+
+/* ─── Scrollbars estilo ChatGPT ───────────────────────── */
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(0,0,0,.25) transparent;
+}
+
+*::-webkit-scrollbar {
+  width:8px;
+  height:8px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  background: rgba(0,0,0,.22);
+  border-radius: 999px;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: rgba(0,0,0,.35);
+}
+
+/* Sidebar (tema escuro) */
+.sidebar-shell * {
+  scrollbar-color: rgba(255,255,255,.25) transparent;
+}
+
+.sidebar-shell *::-webkit-scrollbar-thumb {
+  background: rgba(255,255,255,.18);
+}
+
+.sidebar-shell *::-webkit-scrollbar-thumb:hover {
+  background: rgba(255,255,255,.28);
+}
+
 </style>
 </head>
+
 <body>
 <div id="root"></div>
 
 <script type="text/babel">
 const { useState, useEffect, useRef, useMemo, useCallback } = React;
 
-// ─── Constants ────────────────────────────────────────────────────────────────
-const CURRENT_SCHEMA_VERSION = 3;
+// ─── Constants ─────────────────────────────────────────
+
+const CURRENT_SCHEMA_VERSION = 4; // ↑ upgrade
 
 const DEF_CATS = [
   "Ficção",
@@ -35,15 +85,19 @@ const DEF_CATS = [
   "Arte e Cultura"
 ];
 
-const LEGACY_CATS = [
-  "Ficção","Não-Ficção","Negócios","Marketing",
-  "Ciência","História","Filosofia","Técnico","Outros",
-  "Ficcao","Negocios","Geopolitica","Historia","Auto-Ajuda"
-];
+// 🔧 normalização forte de categorias antigas
+const CATEGORY_FIX_MAP = {
+  "Ficcao":"Ficção",
+  "Ficção":"Ficção",
+  "Negocios":"Negócios",
+  "Historia":"História",
+  "Geopolitica":"Geopolítica",
+  "Auto-Ajuda":"Autoajuda",
+  "Autoajuda":"Autoajuda"
+};
 
-const LEGACY_PROFILES = ["Eu", "Minha esposa"];
+// ─── Utils ─────────────────────────────────────────────
 
-// ─── Utils ────────────────────────────────────────────────────────────────────
 const uid = () => (
   window.crypto?.randomUUID
     ? window.crypto.randomUUID()
@@ -69,11 +123,14 @@ function trimStr(v){
 function uniqueCaseInsensitive(arr=[]){
   const out = [];
   const seen = new Set();
+
   for(const item of arr){
     const clean = trimStr(item);
     if(!clean) continue;
+
     const key = clean.toLocaleLowerCase("pt-BR");
     if(seen.has(key)) continue;
+
     seen.add(key);
     out.push(clean);
   }
@@ -91,44 +148,56 @@ function normalizeTags(tags){
   return uniqueCaseInsensitive(tags.map(normalizeTagValue));
 }
 
-function normalizeCategories(categories){
-  if(!Array.isArray(categories) || !categories.length) return [...DEF_CATS];
-  const cleaned = uniqueCaseInsensitive(categories);
-  const hasLegacy = cleaned.some(c => LEGACY_CATS.includes(c));
-  return hasLegacy ? [...DEF_CATS] : cleaned;
+// 🔥 NOVO: normalização inteligente de categoria
+function normalizeCategory(cat){
+  if(!cat) return "";
+  const clean = trimStr(cat);
+
+  if(CATEGORY_FIX_MAP[clean]) return CATEGORY_FIX_MAP[clean];
+
+  return clean;
 }
 
-function normalizeProfiles(profiles){
-  if(!Array.isArray(profiles)) return [];
-  return uniqueCaseInsensitive(
-    profiles.filter(p => !LEGACY_PROFILES.includes(trimStr(p)))
+function normalizeCategories(categories){
+  if(!Array.isArray(categories) || !categories.length) return [...DEF_CATS];
+
+  const cleaned = uniqueCaseInsensitive(
+    categories.map(normalizeCategory)
   );
+
+  return cleaned;
+}
+
+function normalizeBooks(books){
+  if(!Array.isArray(books)) return [];
+
+  return books.map(book => ({
+    id: book?.id || uid(),
+    title: trimStr(book?.title),
+    author: trimStr(book?.author),
+    category: normalizeCategory(book?.category),
+    tags: normalizeTags(book?.tags),
+    pages: Number(book?.pages) || 0,
+    summary: trimStr(book?.summary),
+    addedAt: book?.addedAt || new Date().toISOString()
+  }))
+  .filter(b => b.title);
 }
 
 function normalizeWishlist(wishlist){
   if(!Array.isArray(wishlist)) return [];
-  return wishlist.map(item=>({
+
+  return wishlist.map(item => ({
     id: item?.id || uid(),
     title: trimStr(item?.title),
     author: trimStr(item?.author),
     link: trimStr(item?.link),
     addedAt: item?.addedAt || new Date().toISOString()
-  })).filter(item=>item.title);
+  }))
+  .filter(i => i.title);
 }
 
-function normalizeBooks(books){
-  if(!Array.isArray(books)) return [];
-  return books.map(book=>({
-    id: book?.id || uid(),
-    title: trimStr(book?.title),
-    author: trimStr(book?.author),
-    category: trimStr(book?.category),
-    tags: normalizeTags(book?.tags),
-    pages: Number(book?.pages) || 0,
-    summary: trimStr(book?.summary),
-    addedAt: book?.addedAt || new Date().toISOString()
-  })).filter(book=>book.title);
-}
+// ─── Migration ─────────────────────────────────────────
 
 function migrateIndexData(raw){
   return {
@@ -136,9 +205,11 @@ function migrateIndexData(raw){
     books: normalizeBooks(raw?.books),
     categories: normalizeCategories(raw?.categories),
     wishlist: normalizeWishlist(raw?.wishlist),
-    profiles: normalizeProfiles(raw?.profiles)
+    profiles: uniqueCaseInsensitive(raw?.profiles || [])
   };
 }
+
+// ─── Helpers ───────────────────────────────────────────
 
 function truncateText(str="", max=70){
   if(str.length <= max) return str;
@@ -148,7 +219,6 @@ function truncateText(str="", max=70){
 function joinTags(tags=[]){
   return tags.length ? tags.join(", ") : "—";
 }
-
 function debounceValue(value, delay, setter){
   return setTimeout(()=>setter(value), delay);
 }
@@ -168,7 +238,7 @@ function catStyle(category){
   return map[category] || { bg:"rgba(45,107,228,.08)", brd:"rgba(45,107,228,.25)", ink:"#2d6be4" };
 }
 
-// ─── IndexedDB ────────────────────────────────────────────────────────────────
+// ─── IndexedDB ────────────────────────────────────────
 function openIDB(){
   return new Promise((res,rej)=>{
     const r=indexedDB.open("mynd_library_v5",1);
@@ -197,7 +267,7 @@ async function idbSet(k,v){
   });
 }
 
-// ─── File System ──────────────────────────────────────────────────────────────
+// ─── File System ──────────────────────────────────────
 async function wf(dir,name,txt){
   const fh=await dir.getFileHandle(name,{create:true});
   const w=await fh.createWritable();
@@ -227,14 +297,14 @@ async function listDirFiles(dir){
   return names;
 }
 
-// ─── Index ────────────────────────────────────────────────────────────────────
+// ─── Index ────────────────────────────────────────────
 async function saveIdx(dir,data){
   await wf(dir,"index.json",JSON.stringify({
     schemaVersion: CURRENT_SCHEMA_VERSION,
     books: normalizeBooks(data?.books),
     categories: normalizeCategories(data?.categories),
     wishlist: normalizeWishlist(data?.wishlist),
-    profiles: normalizeProfiles(data?.profiles)
+    profiles: uniqueCaseInsensitive(data?.profiles || [])
   },null,2));
 }
 
@@ -256,10 +326,32 @@ async function loadIdx(dir){
   try{
     const parsed = JSON.parse(txt);
     const migrated = migrateIndexData(parsed);
-    if(JSON.stringify(parsed) !== JSON.stringify(migrated)){
-      await saveIdx(dir, migrated);
+
+    const validCats = new Set(migrated.categories);
+    const fixedBooks = migrated.books.map(book=>{
+      const normalizedCat = normalizeCategory(book.category);
+      return {
+        ...book,
+        category: validCats.has(normalizedCat) ? normalizedCat : (DEF_CATS.includes(normalizedCat) ? normalizedCat : (normalizedCat && CATEGORY_FIX_MAP[normalizedCat] ? CATEGORY_FIX_MAP[normalizedCat] : (validCats.has(CATEGORY_FIX_MAP[normalizedCat]) ? CATEGORY_FIX_MAP[normalizedCat] : normalizedCat)))
+      };
+    });
+
+    const fullyMigrated = {
+      ...migrated,
+      books: fixedBooks.map(book=>{
+        const cat = normalizeCategory(book.category);
+        return {
+          ...book,
+          category: migrated.categories.includes(cat) ? cat : (DEF_CATS.includes(cat) ? cat : "")
+        };
+      })
+    };
+
+    if(JSON.stringify(parsed) !== JSON.stringify(fullyMigrated)){
+      await saveIdx(dir, fullyMigrated);
     }
-    return migrated;
+
+    return fullyMigrated;
   }catch{
     const fresh = {
       schemaVersion: CURRENT_SCHEMA_VERSION,
@@ -273,7 +365,7 @@ async function loadIdx(dir){
   }
 }
 
-// ─── Chats ────────────────────────────────────────────────────────────────────
+// ─── Chats ────────────────────────────────────────────
 async function loadChats(dir,bookId,profileId){
   const txt=await rf(dir,chatFileName(bookId,profileId));
   if(!txt) return [];
@@ -304,7 +396,7 @@ async function saveGlobalChats(dir,profileId,chats){
   await wf(dir,globalChatFileName(profileId),JSON.stringify(chats,null,2));
 }
 
-// ─── Notes ────────────────────────────────────────────────────────────────────
+// ─── Notes ────────────────────────────────────────────
 async function loadNotes(dir,bookId,profileId){
   const txt=await rf(dir,noteFileName(bookId,profileId));
   if(!txt) return [];
@@ -337,7 +429,7 @@ async function saveNotes(dir,bookId,profileId,notes){
   await wf(dir,noteFileName(bookId,profileId),JSON.stringify(notes,null,2));
 }
 
-// ─── Stats ────────────────────────────────────────────────────────────────────
+// ─── Stats ────────────────────────────────────────────
 async function loadStats(dir){
   const txt=await rf(dir,"stats.json");
   if(!txt) return { consultations:{} };
@@ -359,7 +451,7 @@ async function saveStats(dir,stats){
   },null,2));
 }
 
-// ─── PDF.js ───────────────────────────────────────────────────────────────────
+// ─── PDF.js ───────────────────────────────────────────
 let pdfjsOk=false;
 
 async function loadPdfLib(){
@@ -393,7 +485,7 @@ async function extractPdf(file){
   return { text:t.slice(0,130000), pages:pdf.numPages };
 }
 
-// ─── Claude ───────────────────────────────────────────────────────────────────
+// ─── Claude ───────────────────────────────────────────
 async function callClaude(apiKey,system,messages,maxTok=1200){
   const r=await fetch("https://api.anthropic.com/v1/messages",{
     method:"POST",
@@ -440,7 +532,7 @@ ${(texts[b.id] || "").slice(0,Math.max(per,1500))}`;
 
 const sysSummary=title=>`Leia o trecho do livro "${title}" e escreva um resumo em 3 frases em português: (1) do que trata, (2) para quem é ideal, (3) principal aprendizado. Apenas as 3 frases, sem introdução.`;
 
-// ─── Theme ────────────────────────────────────────────────────────────────────
+// ─── Theme ────────────────────────────────────────────
 const C = {
   bg:"#f7f5f2", surf:"#ffffff", card:"#f0ede8", cardH:"#e8e4de",
   border:"#e2ddd7", borderL:"#ece9e4",
@@ -457,7 +549,7 @@ const C = {
 const SPINES=["#1e4a72","#522870","#7a2020","#1a5c3a","#6e5010","#1e3e70","#6e2050","#2e5c10","#5a5010","#1a5c58"];
 const spineC=id=>SPINES[Math.abs(String(id).split("").reduce((a,c)=>a+c.charCodeAt(0),0)) % SPINES.length];
 
-// ─── Icons ────────────────────────────────────────────────────────────────────
+// ─── Icons ────────────────────────────────────────────
 const Ico=({d,sz=16,col,style={}})=>(
   <svg width={sz} height={sz} viewBox="0 0 24 24" fill="none" stroke={col||"currentColor"} strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" style={style}>
     <path d={d}/>
@@ -491,7 +583,7 @@ const D = {
   save:"M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2zM17 21v-8H7v8M7 3v5h8",
 };
 
-// ─── Base styles ──────────────────────────────────────────────────────────────
+// ─── Base styles ──────────────────────────────────────
 const ov = {
   position:"fixed", inset:0, background:"rgba(10,20,40,.55)",
   display:"flex", alignItems:"center", justifyContent:"center",
@@ -543,7 +635,7 @@ const sbLb = {
   fontSize:10, letterSpacing:"0.12em", textTransform:"uppercase", color:C.sbInkF, fontWeight:600
 };
 
-// ─── TagInput ─────────────────────────────────────────────────────────────────
+// ─── TagInput ──────────────────────────────────────────
 function TagInput({tags,onChange}){
   const [draft,setDraft]=useState("");
   const ref=useRef();
@@ -614,7 +706,7 @@ function TagInput({tags,onChange}){
   );
 }
 
-// ─── BookModal ────────────────────────────────────────────────────────────────
+// ─── BookModal ─────────────────────────────────────────
 function BookModal({mode,initial,categories,onSave,onClose,uploading,prog,err}){
   const [d,setD]=useState({
     title:"",
@@ -646,8 +738,9 @@ function BookModal({mode,initial,categories,onSave,onClose,uploading,prog,err}){
         <div style={{marginBottom:14}}>
           <div style={{...lb,marginBottom:6}}>Categoria</div>
           <select style={fi} value={d.category} onChange={e=>set("category",e.target.value)}>
+            <option value="">Sem categoria</option>
             {categories.map(c=>(
-              <option key={c} style={{background:C.surf}}>{c}</option>
+              <option key={c} value={c} style={{background:C.surf}}>{c}</option>
             ))}
           </select>
         </div>
@@ -673,7 +766,7 @@ function BookModal({mode,initial,categories,onSave,onClose,uploading,prog,err}){
           <button
             style={bP(!d.title.trim() || uploading)}
             disabled={!d.title.trim() || uploading}
-            onClick={()=>onSave({...d, tags: normalizeTags(d.tags)})}
+            onClick={()=>onSave({...d, category: normalizeCategory(d.category), tags: normalizeTags(d.tags)})}
           >
             {uploading ? "Processando…" : mode==="add" ? "Adicionar" : "Salvar"}
           </button>
@@ -683,7 +776,7 @@ function BookModal({mode,initial,categories,onSave,onClose,uploading,prog,err}){
   );
 }
 
-// ─── Category Modal ───────────────────────────────────────────────────────────
+// ─── Category Modal ───────────────────────────────────
 function CatModal({categories,onSave,onClose}){
   const [cats,setCats]=useState([...categories]);
   const [nv,setNv]=useState("");
@@ -691,8 +784,8 @@ function CatModal({categories,onSave,onClose}){
   const [renameMap,setRenameMap]=useState({});
 
   const add=()=>{
-    const v=trimStr(nv);
-    if(!v) return;
+    const v=normalizeCategory(nv);
+    if(!trimStr(v)) return;
     const next = uniqueCaseInsensitive([...cats, v]);
     setCats(next);
     setNv("");
@@ -700,7 +793,7 @@ function CatModal({categories,onSave,onClose}){
 
   const saveEdit=(i)=>{
     const oldValue = cats[i];
-    const val = trimStr(ed?.v);
+    const val = normalizeCategory(ed?.v);
     if(!val){
       setEd(null);
       return;
@@ -710,7 +803,7 @@ function CatModal({categories,onSave,onClose}){
     updated[i]=val;
     const deduped=uniqueCaseInsensitive(updated);
 
-    if(oldValue !== val){
+    if(trimStr(oldValue) !== trimStr(val)){
       setRenameMap(prev=>({
         ...prev,
         [oldValue]: val
@@ -794,7 +887,7 @@ function CatModal({categories,onSave,onClose}){
   );
 }
 
-// ─── Wishlist Modal ───────────────────────────────────────────────────────────
+// ─── Wishlist Modal ───────────────────────────────────
 function WishModal({item,onSave,onClose}){
   const [d,setD]=useState({ title:"", author:"", link:"", ...(item||{}) });
   const set=(k,v)=>setD(p=>({...p,[k]:v}));
@@ -830,7 +923,7 @@ function WishModal({item,onSave,onClose}){
   );
 }
 
-// ─── Note Card ────────────────────────────────────────────────────────────────
+// ─── Note Card ────────────────────────────────────────
 function NoteCard({note,onEdit,onDelete,readonly=false,ownerName=""}){
   return(
     <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:8,padding:"10px 12px",marginBottom:8}}>
@@ -856,7 +949,8 @@ function NoteCard({note,onEdit,onDelete,readonly=false,ownerName=""}){
     </div>
   );
 }
-  // ─── Notes Panel ──────────────────────────────────────────────────────────────
+
+// ─── Notes Panel ──────────────────────────────────────
 function NotesPanel({dirHandle,bookId,profileId,otherProfiles,onNotesPresenceChange}){
   const [myNotes,setMyNotes]=useState([]);
   const [saved,setSaved]=useState(true);
@@ -1056,8 +1150,7 @@ function NotesPanel({dirHandle,bookId,profileId,otherProfiles,onNotesPresenceCha
     </div>
   );
 }
-
-// ─── ChatArea ─────────────────────────────────────────────────────────────────
+   // ─── ChatArea ─────────────────────────────────────────────────────────────────
 function ChatArea({messages,loading,onSend,placeholder,emptyNode,onExport}){
   const [input,setInput]=useState("");
   const endRef=useRef();
@@ -1088,7 +1181,10 @@ function ChatArea({messages,loading,onSend,placeholder,emptyNode,onExport}){
 
   return(
     <>
-      <div style={{flex:1,overflowY:"auto",padding:"24px 28px",display:"flex",flexDirection:"column",gap:16}}>
+      <div
+        className="inner-scroll"
+        style={{flex:1,overflowY:"auto",padding:"24px 28px",display:"flex",flexDirection:"column",gap:16}}
+      >
         {messages.length===0 && emptyNode}
 
         {messages.map((m,i)=>(
@@ -1265,7 +1361,10 @@ function ChatHistory({sessions,otherSessions,activeId,onSelect,onNew,otherProfil
         </button>
       </div>
 
-      <div style={{display:"flex",flexDirection:"column",gap:3,maxHeight:120,overflowY:"auto"}}>
+      <div
+        className="inner-scroll"
+        style={{display:"flex",flexDirection:"column",gap:3,maxHeight:120,overflowY:"auto"}}
+      >
         {tab==="mine" && sessions.map(s=>renderSession(s,false))}
         {tab==="other" && (
           allOther.length===0
@@ -1332,7 +1431,7 @@ function HomePage({
   );
 
   return(
-    <div style={{flex:1,overflowY:"auto",padding:"36px 40px"}}>
+    <div className="inner-scroll" style={{flex:1,overflowY:"auto",padding:"36px 40px"}}>
       <div style={{marginBottom:28,display:"flex",alignItems:"flex-start",justifyContent:"space-between",gap:16,flexWrap:"wrap"}}>
         <div>
           <h1 style={{fontSize:36,fontWeight:700,color:C.ink,lineHeight:1}}>Mynd Library</h1>
@@ -1381,9 +1480,18 @@ function HomePage({
 
       {allBooks.length > 0 && (
         <div style={{background:C.surf,border:`1px solid ${C.border}`,borderRadius:10,padding:"22px 24px",marginBottom:28}}>
-          <div style={{fontSize:18,fontWeight:700,color:C.ink,marginBottom:16}}>Acervo</div>
-          <div style={{overflowX:"auto"}}>
-            <table style={{width:"100%",borderCollapse:"collapse",fontSize:14,tableLayout:"fixed"}}>
+          <div style={{fontSize:18,fontWeight:700,color:C.ink,marginBottom:16}}>Biblioteca</div>
+
+          <div
+            className="inner-scroll"
+            style={{
+              overflow:"auto",
+              maxHeight:330,
+              border:`1px solid ${C.borderL}`,
+              borderRadius:8
+            }}
+          >
+            <table style={{width:"100%",borderCollapse:"separate",borderSpacing:0,fontSize:14,tableLayout:"fixed"}}>
               <thead>
                 <tr style={{borderBottom:`1px solid ${C.border}`}}>
                   {[["title","Nome"],["author","Autor"],["pages","Páginas"],["category","Categoria"],["tags","Tags"],["addedAt","Data"]].map(([col,label])=>(
@@ -1391,21 +1499,26 @@ function HomePage({
                       key={col}
                       onClick={()=>toggleSort(col)}
                       style={{
+                        position:"sticky",
+                        top:0,
+                        zIndex:2,
+                        background:C.surf,
                         textAlign:"left",
-                        padding:"8px 12px",
+                        padding:"10px 12px",
                         cursor:"pointer",
                         color:C.inkD,
                         fontWeight:700,
                         fontSize:12,
                         letterSpacing:"0.05em",
                         userSelect:"none",
-                        whiteSpace:"nowrap"
+                        whiteSpace:"nowrap",
+                        borderBottom:`1px solid ${C.border}`
                       }}
                     >
                       {label}<SortIcon col={col}/>
                     </th>
                   ))}
-                  <th style={{textAlign:"left",padding:"8px 12px",color:C.inkD,fontWeight:700,fontSize:12,letterSpacing:"0.05em",whiteSpace:"nowrap"}}>
+                  <th style={{position:"sticky",top:0,zIndex:2,background:C.surf,textAlign:"left",padding:"10px 12px",color:C.inkD,fontWeight:700,fontSize:12,letterSpacing:"0.05em",whiteSpace:"nowrap",borderBottom:`1px solid ${C.border}`}}>
                     Ações
                   </th>
                 </tr>
@@ -1509,7 +1622,8 @@ function HomePage({
     </div>
   );
 }
-  // ─── Setup ────────────────────────────────────────────────────────────────────
+
+// ─── Setup ────────────────────────────────────────────────────────────────────
 function Setup({onReady}){
   const [apiKey,setKey]=useState(()=>localStorage.getItem("mynd_apikey") || "");
   const [dir,setDir]=useState(null);
@@ -1690,7 +1804,8 @@ function Sidebar({
   hasActiveFilter,
   setModal,
   fileRef,
-  handleFilePick
+  handleFilePick,
+  onDeleteBook
 }){
   return(
     <aside
@@ -1702,21 +1817,10 @@ function Sidebar({
         borderRight:`1px solid ${C.sbBorder}`,
         display:"flex",
         flexDirection:"column",
-        overflowY:"auto",
-        overflowX:"hidden"
+        overflow:"hidden"
       }}
     >
-      <div
-        style={{
-          padding:"16px 14px 12px",
-          borderBottom:`1px solid ${C.sbBorder}`,
-          flexShrink:0,
-          position:"sticky",
-          top:0,
-          background:C.sb,
-          zIndex:3
-        }}
-      >
+      <div style={{padding:"16px 14px 12px",borderBottom:`1px solid ${C.sbBorder}`,flexShrink:0}}>
         <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:4,gap:8}}>
           <div style={{fontSize:19,fontWeight:700,color:C.sbInk,display:"flex",alignItems:"center",gap:8,whiteSpace:"nowrap"}}>
             <Ico d={D.book} sz={17} col={C.sbInk}/> Mynd Library
@@ -1726,17 +1830,7 @@ function Sidebar({
         <div style={{...sbLb,marginTop:3}}>{dirHandle.name}</div>
       </div>
 
-      <div
-        style={{
-          padding:"10px 10px 8px",
-          borderBottom:`1px solid ${C.sbBorder}`,
-          flexShrink:0,
-          position:"sticky",
-          top:57,
-          background:C.sb,
-          zIndex:3
-        }}
-      >
+      <div style={{padding:"10px 10px 8px",borderBottom:`1px solid ${C.sbBorder}`,flexShrink:0}}>
         {[
           {id:"home",label:"Página inicial",icon:D.home,fn:()=>setScreen("home")},
           {id:"global",label:"Pesquisar na biblioteca",icon:D.globe,fn:openGlobal},
@@ -1756,204 +1850,217 @@ function Sidebar({
         ))}
       </div>
 
-      <div style={{flex:1,minHeight:0}}>
-        <div style={{padding:"10px 11px 8px",borderBottom:`1px solid ${C.sbBorder}`}}>
-          <div style={{...sbLb,marginBottom:7,display:"flex",alignItems:"center",gap:6}}>
-            <Ico d={D.search} sz={10}/> Pesquisar um livro
-          </div>
+      <div style={{padding:"10px 11px 8px",borderBottom:`1px solid ${C.sbBorder}`,flexShrink:0}}>
+        <div style={{...sbLb,marginBottom:7,display:"flex",alignItems:"center",gap:6}}>
+          <Ico d={D.search} sz={10}/> Pesquisar um livro
+        </div>
 
-          <div style={{display:"flex",alignItems:"center",gap:7,background:"rgba(0,0,0,.2)",border:`1px solid ${searchDraft.trim()?"rgba(255,255,255,.45)":C.sbBorder}`,borderRadius:6,padding:"7px 10px",marginBottom:10}}>
-            <Ico d={D.search} sz={13} col={C.sbInk}/>
-            <input
-              value={searchDraft}
-              onChange={e=>setSearchDraft(e.target.value)}
-              placeholder="Título ou autor…"
-              style={{flex:1,background:"none",border:"none",outline:"none",color:C.sbInk,fontSize:13,minWidth:0}}
-            />
-            {searchDraft && (
-              <button onClick={()=>setSearchDraft("")} style={{background:"none",border:"none",cursor:"pointer",color:C.sbInk,display:"flex"}}>
-                <Ico d={D.close} sz={12}/>
-              </button>
-            )}
-          </div>
-
-          <div style={{...sbLb,marginBottom:6,display:"flex",alignItems:"center",gap:4}}>
-            <Ico d={D.tag} sz={10}/> Pesquisa por tag
-          </div>
-
-          <div style={{display:"flex",alignItems:"center",gap:7,background:"rgba(0,0,0,.2)",border:`1px solid ${tagDraft.trim()?"rgba(255,255,255,.45)":C.sbBorder}`,borderRadius:6,padding:"7px 10px",marginBottom:8}}>
-            <Ico d={D.tag} sz={13} col={C.sbInk}/>
-            <input
-              value={tagDraft}
-              onChange={e=>setTagDraft(e.target.value)}
-              placeholder="Digite uma tag…"
-              style={{flex:1,background:"none",border:"none",outline:"none",color:C.sbInk,fontSize:13,minWidth:0}}
-            />
-            {tagDraft && (
-              <button onClick={()=>setTagDraft("")} style={{background:"none",border:"none",cursor:"pointer",color:C.sbInk,display:"flex"}}>
-                <Ico d={D.close} sz={12}/>
-              </button>
-            )}
-          </div>
-
-          {allTags.length > 0 && (
-            <div style={{marginBottom:10}}>
-              <div style={{...sbLb,marginBottom:6,display:"flex",alignItems:"center",gap:4}}>
-                <Ico d={D.tag} sz={10}/> Tags disponíveis
-              </div>
-              <div style={{display:"flex",flexWrap:"wrap",gap:5,maxHeight:90,overflowY:"auto"}}>
-                {allTags.map(t=>(
-                  <button
-                    key={t}
-                    onClick={()=>setTagDraft(t)}
-                    style={{
-                      fontSize:11,padding:"2px 8px",borderRadius:10,cursor:"pointer",
-                      border:`1px solid ${tagDraft.toLowerCase()===t.toLowerCase()?"rgba(255,255,255,.75)":"rgba(255,255,255,.28)"}`,
-                      background:tagDraft.toLowerCase()===t.toLowerCase()?"rgba(255,255,255,.18)":"rgba(255,255,255,.08)",
-                      color:C.sbInk,fontWeight:600
-                    }}
-                  >
-                    {t}
-                  </button>
-                ))}
-              </div>
-            </div>
+        <div style={{display:"flex",alignItems:"center",gap:7,background:"rgba(0,0,0,.2)",border:`1px solid ${searchDraft.trim()?"rgba(255,255,255,.45)":C.sbBorder}`,borderRadius:6,padding:"7px 10px",marginBottom:10}}>
+          <Ico d={D.search} sz={13} col={C.sbInk}/>
+          <input
+            value={searchDraft}
+            onChange={e=>setSearchDraft(e.target.value)}
+            placeholder="Título ou autor…"
+            style={{flex:1,background:"none",border:"none",outline:"none",color:C.sbInk,fontSize:13,minWidth:0}}
+          />
+          {searchDraft && (
+            <button onClick={()=>setSearchDraft("")} style={{background:"none",border:"none",cursor:"pointer",color:C.sbInk,display:"flex"}}>
+              <Ico d={D.close} sz={12}/>
+            </button>
           )}
+        </div>
 
-          <div>
-            <div style={{...sbLb,marginBottom:6,display:"flex",alignItems:"center",justifyContent:"space-between"}}>
-              <span style={{display:"flex",alignItems:"center",gap:4}}><Ico d={D.list} sz={10}/> Categorias</span>
-              <button onClick={()=>setModal({type:"cats"})} title="Gerenciar categorias" style={{background:"none",border:"none",cursor:"pointer",color:C.sbInk,display:"flex",padding:2}}>
-                <Ico d={D.edit} sz={11}/>
-              </button>
+        <div style={{...sbLb,marginBottom:6,display:"flex",alignItems:"center",gap:4}}>
+          <Ico d={D.tag} sz={10}/> Pesquisa por tag
+        </div>
+
+        <div style={{display:"flex",alignItems:"center",gap:7,background:"rgba(0,0,0,.2)",border:`1px solid ${tagDraft.trim()?"rgba(255,255,255,.45)":C.sbBorder}`,borderRadius:6,padding:"7px 10px",marginBottom:8}}>
+          <Ico d={D.tag} sz={13} col={C.sbInk}/>
+          <input
+            value={tagDraft}
+            onChange={e=>setTagDraft(e.target.value)}
+            placeholder="Digite uma tag…"
+            style={{flex:1,background:"none",border:"none",outline:"none",color:C.sbInk,fontSize:13,minWidth:0}}
+          />
+          {tagDraft && (
+            <button onClick={()=>setTagDraft("")} style={{background:"none",border:"none",cursor:"pointer",color:C.sbInk,display:"flex"}}>
+              <Ico d={D.close} sz={12}/>
+            </button>
+          )}
+        </div>
+
+        {allTags.length > 0 && (
+          <div style={{marginBottom:10}}>
+            <div style={{...sbLb,marginBottom:6,display:"flex",alignItems:"center",gap:4}}>
+              <Ico d={D.tag} sz={10}/> Tags disponíveis
             </div>
-
-            <div style={{display:"flex",flexDirection:"column",gap:1}}>
-              {["Todas", ...cats].map(cat=>{
-                const active = (cat==="Todas" && !selectedCategory) || (cat!=="Todas" && selectedCategory===cat);
-                return (
-                  <button
-                    key={cat}
-                    onClick={()=>{
-                      if(cat==="Todas"){
-                        setSelectedCategory("");
-                        return;
-                      }
-                      setSelectedCategory(cat);
-                    }}
-                    style={{
-                      display:"flex",alignItems:"center",justifyContent:"space-between",
-                      padding:"5px 9px",borderRadius:6,cursor:"pointer",border:"none",
-                      background:active ? C.sbSurf : "none",
-                      color:active ? C.sbInk : C.sbInkD,
-                      fontSize:12,textAlign:"left",fontWeight:cat==="Todas" ? 700 : 500
-                    }}
-                  >
-                    <span>{cat}</span>
-                    <span style={{fontSize:11,color:C.sbInkF}}>
-                      {cat==="Todas" ? books.length : (catCounts[cat] || 0)}
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-
-          {hasActiveFilter && (
-            <div style={{marginTop:10,paddingTop:10,borderTop:`1px solid ${C.sbBorder}`}}>
-              <div style={{display:"flex",alignItems:"center",gap:6,background:"rgba(255,255,255,.1)",border:"1px solid rgba(255,255,255,.18)",borderRadius:6,padding:"6px 10px"}}>
-                <span style={{fontSize:12,color:C.sbInk,flex:1}}>
-                  {[searchDraft.trim() && `Busca: ${searchDraft}`, tagDraft.trim() && `Tag: ${tagDraft}`, selectedCategory && `Categoria: ${selectedCategory}`].filter(Boolean).join(" | ")}
-                </span>
-                <button onClick={clearFilters} style={{background:"none",border:"none",cursor:"pointer",color:C.sbInk,display:"flex"}}>
-                  <Ico d={D.close} sz={12}/>
+            <div className="inner-scroll" style={{display:"flex",flexWrap:"wrap",gap:5,maxHeight:82,overflowY:"auto",paddingRight:2}}>
+              {allTags.map(t=>(
+                <button
+                  key={t}
+                  onClick={()=>setTagDraft(t)}
+                  style={{
+                    fontSize:11,padding:"2px 8px",borderRadius:10,cursor:"pointer",
+                    border:`1px solid ${tagDraft.toLowerCase()===t.toLowerCase()?"rgba(255,255,255,.75)":"rgba(255,255,255,.28)"}`,
+                    background:tagDraft.toLowerCase()===t.toLowerCase()?"rgba(255,255,255,.18)":"rgba(255,255,255,.08)",
+                    color:C.sbInk,fontWeight:600
+                  }}
+                >
+                  {t}
                 </button>
-              </div>
+              ))}
             </div>
-          )}
+          </div>
+        )}
+
+        <div>
+          <div style={{...sbLb,marginBottom:6,display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+            <span style={{display:"flex",alignItems:"center",gap:4}}><Ico d={D.list} sz={10}/> Categorias</span>
+            <button onClick={()=>setModal({type:"cats"})} title="Gerenciar categorias" style={{background:"none",border:"none",cursor:"pointer",color:C.sbInk,display:"flex",padding:2}}>
+              <Ico d={D.edit} sz={11}/>
+            </button>
+          </div>
+
+          <div className="inner-scroll" style={{display:"flex",flexDirection:"column",gap:1,maxHeight:170,overflowY:"auto",paddingRight:2}}>
+            {["Todas", ...cats].map(cat=>{
+              const active = (cat==="Todas" && !selectedCategory) || (cat!=="Todas" && selectedCategory===cat);
+              const count = cat==="Todas" ? books.length : (catCounts[cat] || 0);
+              return (
+                <button
+                  key={cat}
+                  onClick={()=>{
+                    if(cat==="Todas"){
+                      setSelectedCategory("");
+                      return;
+                    }
+                    setSelectedCategory(cat);
+                  }}
+                  style={{
+                    display:"flex",alignItems:"center",justifyContent:"space-between",
+                    padding:"5px 9px",borderRadius:6,cursor:"pointer",border:"none",
+                    background:active ? C.sbSurf : "none",
+                    color:active ? C.sbInk : C.sbInkD,
+                    fontSize:12,textAlign:"left",fontWeight:cat==="Todas" ? 700 : 500
+                  }}
+                >
+                  <span>{cat}</span>
+                  <span style={{fontSize:11,color:C.sbInkF}}>
+                    {count===0 ? "—" : count}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
         </div>
 
-        <div style={{padding:"8px 9px 12px"}}>
-          {filteredBooks.map(b=>{
-            const isActive = selBook?.id===b.id && screen==="book";
-            return (
-              <div
-                key={b.id}
-                onClick={()=>openBook(b)}
-                style={{
-                  display:"flex",alignItems:"stretch",gap:8,padding:"8px 8px",borderRadius:8,cursor:"pointer",
-                  border:`1px solid ${isActive ? "rgba(255,255,255,.28)" : "transparent"}`,
-                  background:isActive ? C.sbSurfStrong : "none",
-                  marginBottom:3,
-                  boxShadow:isActive ? "inset 0 0 0 1px rgba(255,255,255,.05)" : "none"
-                }}
-              >
-                <div style={{width:5,minWidth:5,borderRadius:3,background:spineC(b.id)}}/>
-                <div style={{flex:1,minWidth:0}}>
-                  <div style={{display:"flex",alignItems:"flex-start"}}>
-                    <div
-                      style={{
-                        flex:1,
-                        minWidth:0,
-                        fontSize:13,
-                        fontWeight:600,
-                        color:C.sbInk,
-                        whiteSpace:"nowrap",
-                        overflow:"hidden",
-                        textOverflow:"ellipsis"
-                      }}
-                    >
-                      {b.title}
-                    </div>
-
-                    <div
-                      style={{
-                        marginLeft:"auto",
-                        paddingLeft:8,
-                        fontSize:11,
-                        color:C.sbInkF,
-                        whiteSpace:"nowrap",
-                        flexShrink:0
-                      }}
-                    >
-                      {b.pages ? `${b.pages} pág.` : "—"}
-                    </div>
-                  </div>
-
-                  {b.author && (
-                    <div style={{fontSize:12,color:C.sbInkD,marginTop:2,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>
-                      {b.author}
-                    </div>
-                  )}
-
-                  <div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap",marginTop:3}}>
-                    {b.category && <div style={{fontSize:10,color:C.sbInkF}}>{b.category}</div>}
-                    {b._hasNotes && <div style={{fontSize:10,color:"#c7e4ff"}}>Notas</div>}
-                  </div>
-                </div>
-              </div>
-            );
-          })}
-
-          {!filteredBooks.length && (
-            <p style={{fontSize:13,color:C.sbInkF,padding:"10px 4px"}}>
-              {books.length===0 ? "Nenhum livro ainda." : "Sem resultados."}
-            </p>
-          )}
-        </div>
+        {hasActiveFilter && (
+          <div style={{marginTop:10,paddingTop:10,borderTop:`1px solid ${C.sbBorder}`}}>
+            <div style={{display:"flex",alignItems:"center",gap:6,background:"rgba(255,255,255,.1)",border:"1px solid rgba(255,255,255,.18)",borderRadius:6,padding:"6px 10px"}}>
+              <span style={{fontSize:12,color:C.sbInk,flex:1}}>
+                {[searchDraft.trim() && `Busca: ${searchDraft}`, tagDraft.trim() && `Tag: ${tagDraft}`, selectedCategory && `Categoria: ${selectedCategory}`].filter(Boolean).join(" | ")}
+              </span>
+              <button onClick={clearFilters} style={{background:"none",border:"none",cursor:"pointer",color:C.sbInk,display:"flex"}}>
+                <Ico d={D.close} sz={12}/>
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
-      <div
-        style={{
-          padding:"12px",
-          borderTop:`1px solid ${C.sbBorder}`,
-          background:C.sb,
-          flexShrink:0,
-          position:"sticky",
-          bottom:0,
-          zIndex:3
-        }}
-      >
+      <div className="inner-scroll" style={{flex:1,minHeight:0,overflowY:"auto",padding:"8px 9px 12px"}}>
+        {filteredBooks.map(b=>{
+          const isActive = selBook?.id===b.id && screen==="book";
+          return (
+            <div
+              key={b.id}
+              onClick={()=>openBook(b)}
+              style={{
+                display:"flex",alignItems:"stretch",gap:7,padding:"7px 7px",borderRadius:8,cursor:"pointer",
+                border:`1px solid ${isActive ? "rgba(255,255,255,.28)" : "transparent"}`,
+                background:isActive ? C.sbSurfStrong : "none",
+                marginBottom:2,
+                boxShadow:isActive ? "inset 0 0 0 1px rgba(255,255,255,.05)" : "none"
+              }}
+            >
+              <div style={{width:5,minWidth:5,borderRadius:3,background:spineC(b.id)}}/>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{display:"flex",alignItems:"flex-start",gap:8}}>
+                  <div
+                    style={{
+                      flex:1,
+                      minWidth:0,
+                      fontSize:12.5,
+                      fontWeight:600,
+                      color:C.sbInk,
+                      lineHeight:1.3,
+                      overflow:"hidden",
+                      display:"-webkit-box",
+                      WebkitLineClamp:2,
+                      WebkitBoxOrient:"vertical"
+                    }}
+                  >
+                    {b.title}
+                  </div>
+
+                  <div
+                    style={{
+                      fontSize:10.5,
+                      color:C.sbInkF,
+                      whiteSpace:"nowrap",
+                      flexShrink:0,
+                      paddingTop:1
+                    }}
+                  >
+                    {b.pages ? `${b.pages} pág.` : "—"}
+                  </div>
+                </div>
+
+                {b.author && (
+                  <div style={{fontSize:11.5,color:C.sbInkD,marginTop:2,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>
+                    {b.author}
+                  </div>
+                )}
+
+                <div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap",marginTop:3}}>
+                  {b.category && <div style={{fontSize:10,color:C.sbInkF}}>{b.category}</div>}
+                  {b._hasNotes && <div style={{fontSize:10,color:"#c7e4ff"}}>Notas</div>}
+                </div>
+
+                <div style={{marginTop:5,display:"flex",justifyContent:"flex-end"}}>
+                  <button
+                    onClick={(e)=>{
+                      e.stopPropagation();
+                      onDeleteBook(b);
+                    }}
+                    style={{
+                      background:"none",
+                      border:"1px solid rgba(255,255,255,.16)",
+                      color:"rgba(255,255,255,.72)",
+                      padding:"3px 8px",
+                      borderRadius:5,
+                      cursor:"pointer",
+                      fontSize:10.5,
+                      display:"flex",
+                      alignItems:"center",
+                      gap:4
+                    }}
+                  >
+                    <Ico d={D.trash} sz={11} col="rgba(255,255,255,.72)"/> Excluir
+                  </button>
+                </div>
+              </div>
+            </div>
+          );
+        })}
+
+        {!filteredBooks.length && (
+          <p style={{fontSize:13,color:C.sbInkF,padding:"10px 4px"}}>
+            {books.length===0 ? "Nenhum livro ainda." : "Sem resultados."}
+          </p>
+        )}
+      </div>
+
+      <div style={{padding:"12px",borderTop:`1px solid ${C.sbBorder}`,background:C.sb,flexShrink:0}}>
         <input ref={fileRef} type="file" accept=".pdf" style={{display:"none"}} onChange={handleFilePick}/>
         <button
           onClick={()=>fileRef.current?.click()}
@@ -1969,7 +2076,7 @@ function Sidebar({
     </aside>
   );
 }
-  // ─── Library ──────────────────────────────────────────────────────────────────
+   // ─── Library ──────────────────────────────────────────────────────────────────
 function Library({dirHandle,apiKey,userName:initUser}){
   const [books,setBooks] = useState([]);
   const [cats,setCats] = useState([...DEF_CATS]);
@@ -2021,10 +2128,17 @@ function Library({dirHandle,apiKey,userName:initUser}){
         listDirFiles(dirHandle)
       ]);
 
+      const validSet = new Set(idx.categories || []);
       const booksWithMeta=(idx.books || []).map(book=>{
+        const fixedCategory = normalizeCategory(book.category);
         const hasNotes = files.some(name=>name.startsWith(`${book.id}_notes_`));
         const hasChats = files.some(name=>name.startsWith(`${book.id}_chats_`));
-        return { ...book, _hasNotes:hasNotes, _hasChats:hasChats };
+        return {
+          ...book,
+          category: validSet.has(fixedCategory) ? fixedCategory : (fixedCategory && DEF_CATS.includes(fixedCategory) ? fixedCategory : ""),
+          _hasNotes:hasNotes,
+          _hasChats:hasChats
+        };
       });
 
       setBooks(booksWithMeta);
@@ -2057,7 +2171,12 @@ function Library({dirHandle,apiKey,userName:initUser}){
   },[tagDraft]);
 
   const persist=async(nextBooks=books,nextCats=cats,nextWishlist=wishlist,nextProfiles=profiles)=>{
-    const booksToStore=nextBooks.map(({_hasNotes,_hasChats,...rest})=>rest);
+    const validSet = new Set(normalizeCategories(nextCats));
+    const booksToStore=nextBooks.map(({_hasNotes,_hasChats,...rest})=>({
+      ...rest,
+      category: validSet.has(normalizeCategory(rest.category)) ? normalizeCategory(rest.category) : ""
+    }));
+
     await saveIdx(dirHandle,{
       books:booksToStore,
       categories:nextCats,
@@ -2114,7 +2233,10 @@ function Library({dirHandle,apiKey,userName:initUser}){
 
   const catCounts=useMemo(()=>{
     const m={};
-    books.forEach(b=>{ m[b.category]=(m[b.category]||0)+1; });
+    books.forEach(b=>{
+      if(!b.category) return;
+      m[b.category]=(m[b.category]||0)+1;
+    });
     return m;
   },[books]);
 
@@ -2169,7 +2291,7 @@ function Library({dirHandle,apiKey,userName:initUser}){
         id,
         title:trimStr(fd.title),
         author:trimStr(fd.author),
-        category:trimStr(fd.category),
+        category: cats.includes(normalizeCategory(fd.category)) ? normalizeCategory(fd.category) : "",
         tags:normalizeTags(fd.tags),
         pages,
         summary,
@@ -2199,9 +2321,10 @@ function Library({dirHandle,apiKey,userName:initUser}){
   };
 
   const doEdit=async(fd)=>{
-    const nb=books.map(b=>b.id===editBook.id ? {...b,...fd,tags:normalizeTags(fd.tags)} : b);
+    const normalizedCategory = cats.includes(normalizeCategory(fd.category)) ? normalizeCategory(fd.category) : "";
+    const nb=books.map(b=>b.id===editBook.id ? {...b,...fd,category:normalizedCategory,tags:normalizeTags(fd.tags)} : b);
     setBooks(nb);
-    if(selBook?.id===editBook.id) setSelBook(p=>({...p,...fd,tags:normalizeTags(fd.tags)}));
+    if(selBook?.id===editBook.id) setSelBook(p=>({...p,...fd,category:normalizedCategory,tags:normalizeTags(fd.tags)}));
     await persist(nb,cats,wishlist,profiles);
     setModal(null);
     setEditBook(null);
@@ -2267,10 +2390,10 @@ function Library({dirHandle,apiKey,userName:initUser}){
     const validSet = new Set(normalized);
 
     const nb = books.map(b=>{
-      let nextCategory = b.category || "";
+      let nextCategory = normalizeCategory(b.category || "");
 
       if(nextCategory && renameMap[nextCategory]){
-        nextCategory = renameMap[nextCategory];
+        nextCategory = normalizeCategory(renameMap[nextCategory]);
       }
 
       if(nextCategory && !validSet.has(nextCategory)){
@@ -2286,6 +2409,14 @@ function Library({dirHandle,apiKey,userName:initUser}){
     if(selBook){
       const updatedSel = nb.find(b=>b.id===selBook.id) || null;
       setSelBook(updatedSel);
+    }
+
+    if(selectedCategory){
+      const nextSelected = renameMap[selectedCategory]
+        ? normalizeCategory(renameMap[selectedCategory])
+        : selectedCategory;
+
+      setSelectedCategory(validSet.has(nextSelected) ? nextSelected : "");
     }
 
     await persist(nb,normalized,wishlist,profiles);
@@ -2604,6 +2735,7 @@ function Library({dirHandle,apiKey,userName:initUser}){
         setModal={setModal}
         fileRef={fileRef}
         handleFilePick={handleFilePick}
+        onDeleteBook={doDelete}
       />
 
       <main style={{flex:1,overflow:"hidden",display:"flex",flexDirection:"column",background:C.bg}}>
@@ -2741,30 +2873,49 @@ function Library({dirHandle,apiKey,userName:initUser}){
       <style>{`
         @keyframes bob{0%,60%,100%{transform:translateY(0)}30%{transform:translateY(-6px)}}
 
-        .sidebar-shell{
+        .inner-scroll{
           scrollbar-width: thin;
-          scrollbar-color: rgba(255,255,255,.22) transparent;
+          scrollbar-color: rgba(0,0,0,.22) transparent;
         }
 
-        .sidebar-shell::-webkit-scrollbar{
-          width: 10px;
+        .inner-scroll::-webkit-scrollbar{
+          width: 8px;
+          height: 8px;
         }
 
-        .sidebar-shell::-webkit-scrollbar-track{
+        .inner-scroll::-webkit-scrollbar-track{
           background: transparent;
         }
 
-        .sidebar-shell::-webkit-scrollbar-thumb{
-          background: rgba(255,255,255,.18);
+        .inner-scroll::-webkit-scrollbar-thumb{
+          background: rgba(0,0,0,.22);
           border-radius: 999px;
-          border: 2px solid transparent;
-          background-clip: padding-box;
         }
 
-        .sidebar-shell::-webkit-scrollbar-thumb:hover{
+        .inner-scroll::-webkit-scrollbar-thumb:hover{
+          background: rgba(0,0,0,.34);
+        }
+
+        .sidebar-shell .inner-scroll{
+          scrollbar-color: rgba(255,255,255,.18) transparent;
+        }
+
+        .sidebar-shell .inner-scroll::-webkit-scrollbar{
+          width: 8px;
+          height: 8px;
+        }
+
+        .sidebar-shell .inner-scroll::-webkit-scrollbar-track{
+          background: transparent;
+        }
+
+        .sidebar-shell .inner-scroll::-webkit-scrollbar-thumb{
+          background: rgba(255,255,255,.18);
+          border-radius: 999px;
+        }
+
+        .sidebar-shell .inner-scroll::-webkit-scrollbar-thumb:hover{
           background: rgba(255,255,255,.28);
-          border: 2px solid transparent;
-          background-clip: padding-box;
         }
       `}</style>
     </div>
