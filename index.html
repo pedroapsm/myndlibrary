@@ -1,4 +1,3 @@
-
 <!DOCTYPE html>
 <html lang="pt-BR">
 <head>
@@ -2337,8 +2336,8 @@ function Sidebar({
           </div>
         )}
 
-        <div>
-          <div style={{...sbLb,marginBottom:6,display:"flex",alignItems:"center",justifyContent:"space-between",paddingRight:2}}>
+        <div style={{overflow:"hidden"}}>
+          <div style={{...sbLb,marginBottom:6,display:"flex",alignItems:"center",justifyContent:"space-between"}}>
             <span style={{display:"flex",alignItems:"center",gap:4}}><Ico d={D.list} sz={10}/> Categorias</span>
             <button onClick={()=>setModal({type:"cats"})} title="Gerenciar categorias" style={{background:"none",border:"none",cursor:"pointer",color:C.sbInk,display:"flex",padding:2}}>
               <Ico d={D.edit} sz={11}/>
@@ -2547,6 +2546,27 @@ function Sidebar({
   );
 }
 
+// ─── WelcomeBook ─────────────────────────────────────
+
+const BOOK_SUGGESTIONS = [
+  "Qual é o tema central?",
+  "Faça um resumo",
+  "Principais conceitos",
+  "Quem são os personagens?"
+];
+
+function WelcomeBook({onSend}){
+  return(
+    <div style={{background:C.surf,border:`1px solid ${C.border}`,borderRadius:10,padding:"20px 24px"}}>
+      <div style={{fontSize:20,fontWeight:700,color:C.accent,marginBottom:8}}>📖 Converse com este livro</div>
+      <p style={{fontSize:15,color:C.inkD,lineHeight:1.7}}>
+        As respostas são baseadas exclusivamente no texto do livro.
+      </p>
+      <SuggestionChips items={BOOK_SUGGESTIONS} onSelect={onSend} variant="global" />
+    </div>
+  );
+}
+
 // ─── Library ──────────────────────────────────────────
 
 function Library({dirHandle,apiKey,userName:initUser}){
@@ -2653,8 +2673,7 @@ function Library({dirHandle,apiKey,userName:initUser}){
   },[searchDraft]);
 
   useEffect(()=>{
-    const t = debounceValue(tagDraft, 160, setTagQuery);
-    return ()=>clearTimeout(t);
+    setTagQuery(tagDraft);
   },[tagDraft]);
 
   const persist=async(nextBooks=books,nextCats=cats,nextWishlist=wishlist,nextProfiles=profiles)=>{
@@ -3193,30 +3212,13 @@ function Library({dirHandle,apiKey,userName:initUser}){
     await persist(nb,cats,wishlist,profiles);
   };
 
-  // AJUSTE 1: suggestion chips chamam diretamente sendBook/sendGlobal
-  const bookSuggestionItems = [
-    "Qual é o tema central?",
-    "Faça um resumo",
-    "Principais conceitos",
-    "Quem são os personagens?"
-  ];
-
+  // suggestion chips para pesquisa global
   const globalSuggestionItems = [
     "Quais livros falam sobre estratégia?",
     "Compare os autores",
     "Resuma cada livro em uma frase",
     "Que temas se repetem?"
   ];
-
-  const WelcomeBook=({onSend})=>(
-    <div style={{background:C.surf,border:`1px solid ${C.border}`,borderRadius:10,padding:"20px 24px"}}>
-      <div style={{fontSize:20,fontWeight:700,color:C.accent,marginBottom:8}}>📖 Converse com este livro</div>
-      <p style={{fontSize:15,color:C.inkD,lineHeight:1.7}}>
-        As respostas são baseadas exclusivamente no texto do livro.
-      </p>
-      <SuggestionChips items={bookSuggestionItems} onSelect={onSend} variant="global" />
-    </div>
-  );
 
   const WelcomeGlobal=()=>(
     <div style={{background:C.surf,border:`1px solid ${C.border}`,borderRadius:10,padding:"20px 24px"}}>
