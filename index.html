@@ -71,7 +71,7 @@ const { useState, useEffect, useRef, useMemo, useCallback } = React;
 
 // ─── Constants ─────────────────────────────────────────
 
-const CURRENT_SCHEMA_VERSION = 4; // ↑ upgrade
+const CURRENT_SCHEMA_VERSION = 4;
 
 const DEF_CATS = [
   "Ficção",
@@ -138,9 +138,9 @@ function uniqueCaseInsensitive(arr=[]){
 }
 
 function normalizeTagValue(tag=""){
-  const clean = trimStr(tag).replace(/\s+/g, " ");
+  const clean = trimStr(tag).replace(/\s+/g, " ").toLocaleLowerCase("pt-BR");
   if(!clean) return "";
-  return clean.charAt(0).toUpperCase() + clean.slice(1);
+  return clean;
 }
 
 function normalizeTags(tags){
@@ -581,6 +581,8 @@ const D = {
   chevDown:"M6 9l6 6 6-6",
   play:"M5 3l14 9-14 9V3z",
   save:"M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2zM17 21v-8H7v8M7 3v5h8",
+  chevronUp:"M18 15l-6-6-6 6",
+  chevronDownSmall:"M6 9l6 6 6-6"
 };
 
 // ─── Base styles ──────────────────────────────────────
@@ -715,14 +717,22 @@ function BookModal({mode,initial,categories,onSave,onClose,uploading,prog,err}){
     tags:[],
     ...initial
   });
+  const [newCategory,setNewCategory]=useState("");
 
   const set=(k,v)=>setD(p=>({...p,[k]:v}));
 
+  const addInlineCategory=()=>{
+    const normalized = normalizeCategory(newCategory);
+    if(!normalized) return;
+    set("category", normalized);
+    setNewCategory("");
+  };
+
   return(
-    <div style={ov} onClick={e=>{ if(e.target===e.currentTarget) onClose(); }}>
+    <div style={ov}>
       <div style={mb}>
         <div style={{fontSize:22,fontWeight:600,color:C.ink,marginBottom:18}}>
-          {mode==="add" ? "Adicionar ao acervo" : "Editar livro"}
+          {mode==="add" ? "Adicionar à biblioteca" : "Editar livro"}
         </div>
 
         <div style={{marginBottom:14}}>
@@ -735,14 +745,42 @@ function BookModal({mode,initial,categories,onSave,onClose,uploading,prog,err}){
           <input style={fi} value={d.author} onChange={e=>set("author",e.target.value)} placeholder="Nome do autor" />
         </div>
 
-        <div style={{marginBottom:14}}>
+        <div style={{marginBottom:10}}>
           <div style={{...lb,marginBottom:6}}>Categoria</div>
           <select style={fi} value={d.category} onChange={e=>set("category",e.target.value)}>
             <option value="">Sem categoria</option>
             {categories.map(c=>(
               <option key={c} value={c} style={{background:C.surf}}>{c}</option>
             ))}
+            {!!d.category && !categories.includes(d.category) && (
+              <option value={d.category} style={{background:C.surf}}>{d.category}</option>
+            )}
           </select>
+        </div>
+
+        <div style={{marginBottom:18}}>
+          <div style={{display:"flex",gap:8}}>
+            <input
+              style={{...fi,flex:1}}
+              value={newCategory}
+              onChange={e=>setNewCategory(e.target.value)}
+              onKeyDown={e=>{
+                if(e.key==="Enter"){
+                  e.preventDefault();
+                  addInlineCategory();
+                }
+              }}
+              placeholder="Criar nova categoria"
+            />
+            <button
+              type="button"
+              onClick={addInlineCategory}
+              disabled={!newCategory.trim()}
+              style={bP(!newCategory.trim())}
+            >
+              Adicionar
+            </button>
+          </div>
         </div>
 
         <div style={{marginBottom:18}}>
@@ -814,14 +852,51 @@ function CatModal({categories,onSave,onClose}){
     setEd(null);
   };
 
+  const moveCat=(from,to)=>{
+    if(to < 0 || to >= cats.length) return;
+    const next=[...cats];
+    const [item]=next.splice(from,1);
+    next.splice(to,0,item);
+    setCats(next);
+  };
+
   return(
     <div style={ov} onClick={e=>{ if(e.target===e.currentTarget) onClose(); }}>
-      <div style={{...mb,width:430}}>
+      <div style={{...mb,width:460}}>
         <div style={{fontSize:22,fontWeight:600,color:C.ink,marginBottom:18}}>Gerenciar categorias</div>
 
         <div style={{display:"flex",flexDirection:"column",gap:6,marginBottom:16}}>
           {cats.map((c,i)=>(
             <div key={i} style={{display:"flex",alignItems:"center",gap:8,background:C.card,border:`1px solid ${C.border}`,borderRadius:7,padding:"8px 10px"}}>
+              <div style={{display:"flex",flexDirection:"column",gap:4}}>
+                <button
+                  type="button"
+                  onClick={()=>moveCat(i,i-1)}
+                  disabled={i===0}
+                  style={{
+                    ...bI,
+                    padding:"3px",
+                    cursor:i===0?"not-allowed":"pointer",
+                    opacity:i===0?.45:1
+                  }}
+                >
+                  <Ico d={D.chevronUp} sz={12}/>
+                </button>
+                <button
+                  type="button"
+                  onClick={()=>moveCat(i,i+1)}
+                  disabled={i===cats.length-1}
+                  style={{
+                    ...bI,
+                    padding:"3px",
+                    cursor:i===cats.length-1?"not-allowed":"pointer",
+                    opacity:i===cats.length-1?.45:1
+                  }}
+                >
+                  <Ico d={D.chevronDownSmall} sz={12}/>
+                </button>
+              </div>
+
               {ed?.i===i ? (
                 <>
                   <input
@@ -953,7 +1028,7 @@ function NoteCard({note,onEdit,onDelete,readonly=false,ownerName=""}){
 // ─── Notes Panel ──────────────────────────────────────
 function NotesPanel({dirHandle,bookId,profileId,otherProfiles,onNotesPresenceChange}){
   const [myNotes,setMyNotes]=useState([]);
-  const [saved,setSaved]=useState(true);
+  const [saveState,setSaveState]=useState(null);
   const [ready,setReady]=useState(false);
   const [viewMode,setViewMode]=useState(profileId);
   const [otherNotes,setOtherNotes]=useState({});
@@ -989,14 +1064,16 @@ function NotesPanel({dirHandle,bookId,profileId,otherProfiles,onNotesPresenceCha
     setViewMode(profileId);
     setDraft("");
     setEditingId(null);
+    setSaveState(null);
   },[bookId, profileId]);
 
   const saveList=async(next)=>{
     setMyNotes(next);
-    setSaved(false);
+    setSaveState("saving");
     await saveNotes(dirHandle,bookId,profileId,next);
     onNotesPresenceChange?.(next.length > 0);
-    setSaved(true);
+    setSaveState("saved");
+    setTimeout(()=>setSaveState(current=>current==="saved" ? null : current), 1400);
   };
 
   const addOrUpdate=async()=>{
@@ -1110,9 +1187,12 @@ function NotesPanel({dirHandle,bookId,profileId,otherProfiles,onNotesPresenceCha
               </button>
             ))}
           </div>
-          <span style={{fontSize:12,color:saved?C.green:C.inkF,transition:"color .3s"}}>
-            {saved ? "✓ salvo" : "salvando…"}
-          </span>
+
+          {saveState && (
+            <span style={{fontSize:12,color:saveState==="saved"?C.green:C.inkF,transition:"color .3s"}}>
+              {saveState==="saved" ? "✓ salvo" : "salvando…"}
+            </span>
+          )}
         </div>
       </div>
 
@@ -1150,7 +1230,7 @@ function NotesPanel({dirHandle,bookId,profileId,otherProfiles,onNotesPresenceCha
     </div>
   );
 }
-   // ─── ChatArea ─────────────────────────────────────────────────────────────────
+     // ─── ChatArea ─────────────────────────────────────────────────────────────────
 function ChatArea({messages,loading,onSend,placeholder,emptyNode,onExport}){
   const [input,setInput]=useState("");
   const endRef=useRef();
@@ -1376,6 +1456,61 @@ function ChatHistory({sessions,otherSessions,activeId,onSelect,onNew,otherProfil
   );
 }
 
+// ─── Toasts ───────────────────────────────────────────────────────────────────
+function Toasts({items,onRemove}){
+  if(!items.length) return null;
+
+  return(
+    <div
+      style={{
+        position:"fixed",
+        right:20,
+        bottom:20,
+        zIndex:500,
+        display:"flex",
+        flexDirection:"column",
+        gap:10,
+        pointerEvents:"none"
+      }}
+    >
+      {items.map(t=>(
+        <div
+          key={t.id}
+          style={{
+            minWidth:220,
+            maxWidth:360,
+            background:C.ink,
+            color:"#fff",
+            borderRadius:10,
+            padding:"12px 14px",
+            boxShadow:"0 16px 40px rgba(0,0,0,.22)",
+            fontSize:14,
+            lineHeight:1.45,
+            pointerEvents:"auto"
+          }}
+        >
+          <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",gap:10}}>
+            <span>{t.text}</span>
+            <button
+              onClick={()=>onRemove(t.id)}
+              style={{
+                background:"none",
+                border:"none",
+                color:"rgba(255,255,255,.8)",
+                cursor:"pointer",
+                padding:0,
+                display:"flex"
+              }}
+            >
+              <Ico d={D.close} sz={13} col="rgba(255,255,255,.8)"/>
+            </button>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 // ─── HomePage ─────────────────────────────────────────────────────────────────
 function HomePage({
   visibleBooks, allBooks, wishlist,onAddWish,onEditWish,onDeleteWish,lastBook,onContinue,
@@ -1435,7 +1570,7 @@ function HomePage({
       <div style={{marginBottom:28,display:"flex",alignItems:"flex-start",justifyContent:"space-between",gap:16,flexWrap:"wrap"}}>
         <div>
           <h1 style={{fontSize:36,fontWeight:700,color:C.ink,lineHeight:1}}>Mynd Library</h1>
-          <p style={{fontSize:16,color:C.inkF,marginTop:8}}>Seu acervo pessoal.</p>
+          <p style={{fontSize:16,color:C.inkF,marginTop:8}}>Sua biblioteca pessoal.</p>
         </div>
         <button
           onClick={onAddBook}
@@ -1528,8 +1663,25 @@ function HomePage({
                   const c = catStyle(b.category);
                   return (
                     <tr key={b.id} style={{borderBottom:`1px solid ${C.borderL}`, transition:"background .15s"}} onMouseEnter={e=>e.currentTarget.style.background="#faf9f7"} onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
-                      <td style={{padding:"11px 12px",color:C.ink,fontWeight:600,verticalAlign:"top"}}>
-                        <div title={b.title}>{truncateText(b.title,42)}</div>
+                      <td style={{padding:"11px 12px",verticalAlign:"top"}}>
+                        <button
+                          onClick={()=>onOpenBook(b)}
+                          title={b.title}
+                          style={{
+                            background:"none",
+                            border:"none",
+                            padding:0,
+                            margin:0,
+                            cursor:"pointer",
+                            color:C.ink,
+                            fontWeight:600,
+                            textAlign:"left",
+                            fontSize:14,
+                            lineHeight:1.45
+                          }}
+                        >
+                          {truncateText(b.title,42)}
+                        </button>
                       </td>
                       <td style={{padding:"11px 12px",color:C.inkD,verticalAlign:"top"}}>
                         <div title={b.author || ""}>{b.author ? truncateText(b.author,28) : "—"}</div>
@@ -1538,7 +1690,7 @@ function HomePage({
                         {b.pages ? `${b.pages} pág.` : "—"}
                       </td>
                       <td style={{padding:"11px 12px",verticalAlign:"top"}}>
-                        {b.category ? <span style={{fontSize:11,padding:"3px 9px",borderRadius:12,background:c.bg,color:c.ink,border:`1px solid ${c.brd}`,fontWeight:600}}>{b.category}</span> : "—"}
+                        {b.category ? <span style={{fontSize:11,padding:"3px 9px",borderRadius:12,background:c.bg,color:c.ink,border:`1px solid ${c.brd}`,fontWeight:600}}>{b.category}</span> : <span style={{fontSize:11,color:C.inkF}}>—</span>}
                       </td>
                       <td style={{padding:"11px 12px",color:C.inkF,verticalAlign:"top",minWidth:220}}>
                         <div title={joinTags(b.tags||[])} style={{lineHeight:1.5}}>
@@ -1670,7 +1822,7 @@ function Setup({onReady}){
       <div style={{width:560,maxWidth:"92vw"}}>
         <h1 style={{fontSize:40,fontWeight:700,color:C.ink,marginBottom:6}}>Mynd Library</h1>
         <p style={{fontSize:16,color:C.inkD,lineHeight:1.65,marginBottom:28}}>
-          Configure uma vez e siga usando seu acervo na pasta escolhida.
+          Configure uma vez e siga usando sua biblioteca na pasta escolhida.
         </p>
 
         <div style={{background:C.surf,border:`1px solid ${C.border}`,borderRadius:12,padding:28,display:"flex",flexDirection:"column",gap:22}}>
@@ -1807,6 +1959,18 @@ function Sidebar({
   handleFilePick,
   onDeleteBook
 }){
+  const categoryListRef=useRef(null);
+  const booksListRef=useRef(null);
+
+  useEffect(()=>{
+    const catEl=categoryListRef.current;
+    const bookEl=booksListRef.current;
+    if(!catEl || !bookEl) return;
+
+    const width = `${bookEl.offsetWidth - bookEl.clientWidth}px`;
+    catEl.style.setProperty("--scrollbar-space", width);
+  },[cats, filteredBooks.length]);
+
   return(
     <aside
       className="sidebar-shell"
@@ -1895,33 +2059,40 @@ function Sidebar({
               <Ico d={D.tag} sz={10}/> Tags disponíveis
             </div>
             <div className="inner-scroll" style={{display:"flex",flexWrap:"wrap",gap:5,maxHeight:82,overflowY:"auto",paddingRight:2}}>
-              {allTags.map(t=>(
-                <button
-                  key={t}
-                  onClick={()=>setTagDraft(t)}
-                  style={{
-                    fontSize:11,padding:"2px 8px",borderRadius:10,cursor:"pointer",
-                    border:`1px solid ${tagDraft.toLowerCase()===t.toLowerCase()?"rgba(255,255,255,.75)":"rgba(255,255,255,.28)"}`,
-                    background:tagDraft.toLowerCase()===t.toLowerCase()?"rgba(255,255,255,.18)":"rgba(255,255,255,.08)",
-                    color:C.sbInk,fontWeight:600
-                  }}
-                >
-                  {t}
-                </button>
-              ))}
+              {allTags.map(t=>{
+                const active = tagDraft.toLowerCase()===t.toLowerCase();
+                return (
+                  <button
+                    key={t}
+                    onClick={()=>setTagDraft(active ? "" : t)}
+                    style={{
+                      fontSize:11,padding:"2px 8px",borderRadius:10,cursor:"pointer",
+                      border:`1px solid ${active?"rgba(255,255,255,.75)":"rgba(255,255,255,.28)"}`,
+                      background:active?"rgba(255,255,255,.18)":"rgba(255,255,255,.08)",
+                      color:C.sbInk,fontWeight:600
+                    }}
+                  >
+                    {t}
+                  </button>
+                );
+              })}
             </div>
           </div>
         )}
 
         <div>
           <div style={{...sbLb,marginBottom:6,display:"flex",alignItems:"center",justifyContent:"space-between"}}>
-            <span style={{display:"flex",alignItems:"center",gap:4}}><Ico d={D.list} sz={10}/> Categorias</span>
+            <span style={{display:"flex",alignItems:"center",gap:4}}><Ico d={D.list} sz={10}/> Biblioteca</span>
             <button onClick={()=>setModal({type:"cats"})} title="Gerenciar categorias" style={{background:"none",border:"none",cursor:"pointer",color:C.sbInk,display:"flex",padding:2}}>
               <Ico d={D.edit} sz={11}/>
             </button>
           </div>
 
-          <div className="inner-scroll" style={{display:"flex",flexDirection:"column",gap:1,maxHeight:170,overflowY:"auto",paddingRight:2}}>
+          <div
+            ref={categoryListRef}
+            className="inner-scroll category-scroll"
+            style={{display:"flex",flexDirection:"column",gap:1,maxHeight:170,overflowY:"auto",paddingRight:"var(--scrollbar-space, 8px)"}}
+          >
             {["Todas", ...cats].map(cat=>{
               const active = (cat==="Todas" && !selectedCategory) || (cat!=="Todas" && selectedCategory===cat);
               const count = cat==="Todas" ? books.length : (catCounts[cat] || 0);
@@ -1930,10 +2101,10 @@ function Sidebar({
                   key={cat}
                   onClick={()=>{
                     if(cat==="Todas"){
-                      setSelectedCategory("");
+                      setSelectedCategory(selectedCategory ? "" : "");
                       return;
                     }
-                    setSelectedCategory(cat);
+                    setSelectedCategory(selectedCategory===cat ? "" : cat);
                   }}
                   style={{
                     display:"flex",alignItems:"center",justifyContent:"space-between",
@@ -1944,8 +2115,8 @@ function Sidebar({
                   }}
                 >
                   <span>{cat}</span>
-                  <span style={{fontSize:11,color:C.sbInkF}}>
-                    {count===0 ? "—" : count}
+                  <span style={{fontSize:10,color:C.sbInkF,minWidth:12,textAlign:"right"}}>
+                    {count===0 ? "–" : count}
                   </span>
                 </button>
               );
@@ -1967,7 +2138,7 @@ function Sidebar({
         )}
       </div>
 
-      <div className="inner-scroll" style={{flex:1,minHeight:0,overflowY:"auto",padding:"8px 9px 12px"}}>
+      <div ref={booksListRef} className="inner-scroll" style={{flex:1,minHeight:0,overflowY:"auto",padding:"8px 9px 12px"}}>
         {filteredBooks.map(b=>{
           const isActive = selBook?.id===b.id && screen==="book";
           return (
@@ -1983,7 +2154,7 @@ function Sidebar({
               }}
             >
               <div style={{width:5,minWidth:5,borderRadius:3,background:spineC(b.id)}}/>
-              <div style={{flex:1,minWidth:0}}>
+              <div style={{flex:1,minWidth:0,display:"flex",flexDirection:"column"}}>
                 <div style={{display:"flex",alignItems:"flex-start",gap:8}}>
                   <div
                     style={{
@@ -2021,12 +2192,15 @@ function Sidebar({
                   </div>
                 )}
 
-                <div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap",marginTop:3}}>
+                <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap",marginTop:4}}>
                   {b.category && <div style={{fontSize:10,color:C.sbInkF}}>{b.category}</div>}
                   {b._hasNotes && <div style={{fontSize:10,color:"#c7e4ff"}}>Notas</div>}
                 </div>
 
-                <div style={{marginTop:5,display:"flex",justifyContent:"flex-end"}}>
+                <div style={{marginTop:6,display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+                  <div style={{fontSize:10,color:"rgba(255,255,255,.62)"}}>
+                    {b.pages ? `${b.pages} pág.` : ""}
+                  </div>
                   <button
                     onClick={(e)=>{
                       e.stopPropagation();
@@ -2076,7 +2250,7 @@ function Sidebar({
     </aside>
   );
 }
-   // ─── Library ──────────────────────────────────────────────────────────────────
+     // ─── Library ──────────────────────────────────────────────────────────────────
 function Library({dirHandle,apiKey,userName:initUser}){
   const [books,setBooks] = useState([]);
   const [cats,setCats] = useState([...DEF_CATS]);
@@ -2116,9 +2290,22 @@ function Library({dirHandle,apiKey,userName:initUser}){
   const [upErr,setUpErr] = useState("");
   const [userName,setUserName] = useState(initUser);
   const [lastBook,setLastBook] = useState(null);
+  const [toasts,setToasts] = useState([]);
   const fileRef=useRef();
 
   const otherProfiles=useMemo(()=>profiles.filter(p=>p!==userName),[profiles,userName]);
+
+  const pushToast=useCallback((text)=>{
+    const id=uid();
+    setToasts(prev=>[...prev,{id,text}]);
+    setTimeout(()=>{
+      setToasts(prev=>prev.filter(t=>t.id!==id));
+    },2400);
+  },[]);
+
+  const removeToast=useCallback((id)=>{
+    setToasts(prev=>prev.filter(t=>t.id!==id));
+  },[]);
 
   useEffect(()=>{
     (async()=>{
@@ -2135,6 +2322,7 @@ function Library({dirHandle,apiKey,userName:initUser}){
         const hasChats = files.some(name=>name.startsWith(`${book.id}_chats_`));
         return {
           ...book,
+          tags: normalizeTags(book.tags),
           category: validSet.has(fixedCategory) ? fixedCategory : (fixedCategory && DEF_CATS.includes(fixedCategory) ? fixedCategory : ""),
           _hasNotes:hasNotes,
           _hasChats:hasChats
@@ -2171,15 +2359,17 @@ function Library({dirHandle,apiKey,userName:initUser}){
   },[tagDraft]);
 
   const persist=async(nextBooks=books,nextCats=cats,nextWishlist=wishlist,nextProfiles=profiles)=>{
-    const validSet = new Set(normalizeCategories(nextCats));
+    const normalizedCats = normalizeCategories(nextCats);
+    const validSet = new Set(normalizedCats);
     const booksToStore=nextBooks.map(({_hasNotes,_hasChats,...rest})=>({
       ...rest,
+      tags: normalizeTags(rest.tags),
       category: validSet.has(normalizeCategory(rest.category)) ? normalizeCategory(rest.category) : ""
     }));
 
     await saveIdx(dirHandle,{
       books:booksToStore,
-      categories:nextCats,
+      categories:normalizedCats,
       wishlist:nextWishlist,
       profiles:nextProfiles
     });
@@ -2210,7 +2400,7 @@ function Library({dirHandle,apiKey,userName:initUser}){
 
   const allTags=useMemo(()=>{
     const s=new Set();
-    books.forEach(b=>(b.tags||[]).forEach(t=>s.add(t)));
+    books.forEach(b=>(b.tags||[]).forEach(t=>s.add(normalizeTagValue(t))));
     return [...s].sort((a,b)=>a.localeCompare(b,"pt-BR"));
   },[books]);
 
@@ -2276,6 +2466,15 @@ function Library({dirHandle,apiKey,userName:initUser}){
     setUpErr("");
 
     try{
+      const normalizedCategory = normalizeCategory(fd.category);
+      const nextCats = normalizedCategory && !cats.includes(normalizedCategory)
+        ? [...cats, normalizedCategory]
+        : cats;
+
+      if(nextCats !== cats){
+        setCats(nextCats);
+      }
+
       const {text,pages}=await extractPdf(pendingFile);
       setUpProg(55);
 
@@ -2291,7 +2490,7 @@ function Library({dirHandle,apiKey,userName:initUser}){
         id,
         title:trimStr(fd.title),
         author:trimStr(fd.author),
-        category: cats.includes(normalizeCategory(fd.category)) ? normalizeCategory(fd.category) : "",
+        category: nextCats.includes(normalizedCategory) ? normalizedCategory : "",
         tags:normalizeTags(fd.tags),
         pages,
         summary,
@@ -2304,9 +2503,11 @@ function Library({dirHandle,apiKey,userName:initUser}){
 
       const nb=[...books,book];
       setBooks(nb);
-      await persist(nb,cats,wishlist,profiles);
+      await persist(nb,nextCats,wishlist,profiles);
 
       setUpProg(100);
+      pushToast("Livro adicionado à biblioteca");
+
       setTimeout(()=>{
         setModal(null);
         setPendingFile(null);
@@ -2321,13 +2522,29 @@ function Library({dirHandle,apiKey,userName:initUser}){
   };
 
   const doEdit=async(fd)=>{
-    const normalizedCategory = cats.includes(normalizeCategory(fd.category)) ? normalizeCategory(fd.category) : "";
-    const nb=books.map(b=>b.id===editBook.id ? {...b,...fd,category:normalizedCategory,tags:normalizeTags(fd.tags)} : b);
+    const normalizedCategory = normalizeCategory(fd.category);
+    const nextCats = normalizedCategory && !cats.includes(normalizedCategory)
+      ? [...cats, normalizedCategory]
+      : cats;
+
+    if(nextCats !== cats){
+      setCats(nextCats);
+    }
+
+    const nextTags = normalizeTags(fd.tags);
+    const finalCategory = nextCats.includes(normalizedCategory) ? normalizedCategory : "";
+
+    const nb=books.map(b=>b.id===editBook.id ? {...b,...fd,category:finalCategory,tags:nextTags} : b);
     setBooks(nb);
-    if(selBook?.id===editBook.id) setSelBook(p=>({...p,...fd,category:normalizedCategory,tags:normalizeTags(fd.tags)}));
-    await persist(nb,cats,wishlist,profiles);
+
+    if(selBook?.id===editBook.id){
+      setSelBook(p=>({...p,...fd,category:finalCategory,tags:nextTags}));
+    }
+
+    await persist(nb,nextCats,wishlist,profiles);
     setModal(null);
     setEditBook(null);
+    pushToast("Livro atualizado");
   };
 
   const doDelete=async(book)=>{
@@ -2376,6 +2593,7 @@ function Library({dirHandle,apiKey,userName:initUser}){
     }
 
     localStorage.removeItem(`mynd_lastChat_${book.id}`);
+    pushToast("Livro excluído");
   };
 
   const saveCats=async(payload)=>{
@@ -2421,14 +2639,17 @@ function Library({dirHandle,apiKey,userName:initUser}){
 
     await persist(nb,normalized,wishlist,profiles);
     setModal(null);
+    pushToast("Categorias atualizadas");
   };
 
   const saveWish=async(d)=>{
     let nw;
     if(wishEdit){
       nw=wishlist.map(w=>w.id===wishEdit.id ? {...wishEdit,...d} : w);
+      pushToast("Wishlist atualizada");
     }else{
       nw=[...wishlist,{...d,id:uid(),addedAt:new Date().toISOString()}];
+      pushToast("Livro adicionado à wishlist");
     }
     setWishlist(nw);
     await persist(books,cats,nw,profiles);
@@ -2440,6 +2661,7 @@ function Library({dirHandle,apiKey,userName:initUser}){
     const nw=wishlist.filter(w=>w.id!==id);
     setWishlist(nw);
     await persist(books,cats,nw,profiles);
+    pushToast("Livro removido da wishlist");
   };
 
   const openBook=async(book)=>{
@@ -2638,6 +2860,7 @@ function Library({dirHandle,apiKey,userName:initUser}){
     a.href=URL.createObjectURL(blob);
     a.download=`conversa_${title.replace(/\s+/g,"_").slice(0,30)}.txt`;
     a.click();
+    pushToast("Conversa exportada");
   };
 
   const switchProfile=async(name)=>{
@@ -2672,7 +2895,17 @@ function Library({dirHandle,apiKey,userName:initUser}){
         {["Qual é o tema central?","Faça um resumo","Principais conceitos","Quem são os personagens?"].map(s=>(
           <button
             key={s}
-            style={{fontSize:13,padding:"6px 12px",borderRadius:6,border:`1px solid ${C.border}`,background:"none",color:C.inkD,cursor:"pointer",fontWeight:500}}
+            type="button"
+            style={{
+              fontSize:13,
+              padding:"7px 12px",
+              borderRadius:7,
+              border:`1px solid ${C.border}`,
+              background:C.bg,
+              color:C.inkD,
+              cursor:"pointer",
+              fontWeight:600
+            }}
             onClick={()=>sendBook(s)}
           >
             {s}
@@ -2769,9 +3002,15 @@ function Library({dirHandle,apiKey,userName:initUser}){
                   {openingBook && <span style={{fontSize:12,color:C.inkF,fontWeight:500}}>Carregando…</span>}
                 </div>
                 {selBook.author && <div style={{fontSize:15,color:C.inkF,marginTop:3}}>{selBook.author}</div>}
-                <div style={{display:"flex",flexWrap:"wrap",gap:10,rowGap:6,marginTop:10,alignItems:"center"}}>
-                  {selBook.pages ? <span style={{fontSize:13,color:C.inkF}}>{selBook.pages} pág.</span> : null}
+                <div style={{display:"flex",flexWrap:"wrap",gap:8,rowGap:6,marginTop:10,alignItems:"center"}}>
                   {selBook.category ? (()=>{ const c=catStyle(selBook.category); return <span style={{fontSize:12,padding:"3px 9px",borderRadius:12,background:c.bg,color:c.ink,border:`1px solid ${c.brd}`,fontWeight:600}}>{selBook.category}</span>; })() : null}
+
+                  {selBook.category && selBook.pages ? <span style={{fontSize:12,color:C.inkF}}>•</span> : null}
+
+                  {selBook.pages ? <span style={{fontSize:13,color:C.inkF}}>{selBook.pages} pág.</span> : null}
+
+                  {(selBook.category || selBook.pages) && (selBook.tags||[]).length > 0 ? <span style={{fontSize:12,color:C.inkF}}>•</span> : null}
+
                   {(selBook.tags||[]).length > 0 ? <span style={{fontSize:13,color:C.inkF}}>Tags: {(selBook.tags||[]).join(", ")}</span> : null}
                 </div>
               </div>
@@ -2808,7 +3047,7 @@ function Library({dirHandle,apiKey,userName:initUser}){
 
             <div style={{padding:"6px 28px 0",borderBottom:`1px solid ${C.border}`,borderTop:chatSessions.length || Object.keys(otherSessions).length ? `1px solid ${C.border}` : "none"}}>
               <div style={{...lb,paddingBottom:7,display:"flex",alignItems:"center",gap:6}}>
-                <Ico d={D.chat} sz={11}/> Conversa {activeChatId ? "(continuando)" : "(nova)"}
+                <Ico d={D.chat} sz={11}/> Conversa
               </div>
             </div>
 
@@ -2849,7 +3088,7 @@ function Library({dirHandle,apiKey,userName:initUser}){
 
             <div style={{padding:"6px 28px 0",borderBottom:`1px solid ${C.border}`,borderTop:globalSessions.length || Object.keys(otherGlobalSessions).length ? `1px solid ${C.border}` : "none"}}>
               <div style={{...lb,paddingBottom:7,display:"flex",alignItems:"center",gap:6}}>
-                <Ico d={D.globe} sz={11}/> Pesquisa global {activeGlobalChatId ? "(continuando)" : "(nova)"}
+                <Ico d={D.globe} sz={11}/> Pesquisa na biblioteca
               </div>
             </div>
 
@@ -2869,6 +3108,7 @@ function Library({dirHandle,apiKey,userName:initUser}){
       {modal?.type==="add" && <BookModal mode="add" initial={modal.initial} categories={cats} onSave={doAdd} onClose={()=>{setModal(null); setPendingFile(null);}} uploading={uploading} prog={upProg} err={upErr}/>}
       {modal?.type==="edit" && editBook && <BookModal mode="edit" initial={modal.initial} categories={cats} onSave={doEdit} onClose={()=>{setModal(null); setEditBook(null);}} uploading={false} prog={0} err=""/>}
       {wishModal && <WishModal item={wishEdit} onSave={saveWish} onClose={()=>{setWishModal(false); setWishEdit(null);}}/>}
+      <Toasts items={toasts} onRemove={removeToast}/>
 
       <style>{`
         @keyframes bob{0%,60%,100%{transform:translateY(0)}30%{transform:translateY(-6px)}}
@@ -2921,8 +3161,7 @@ function Library({dirHandle,apiKey,userName:initUser}){
     </div>
   );
 }
-
-// ─── Root ─────────────────────────────────────────────────────────────────────
+  // ─── Root ─────────────────────────────────────────────────────────────────────
 function Root(){
   const [phase,setPhase]=useState("loading");
   const [dirHandle,setDir]=useState(null);
