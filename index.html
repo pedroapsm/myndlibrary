@@ -94,7 +94,7 @@ const CATEGORY_FIX_MAP = {
 
 const CHUNK_SIZE = 1800;
 const CHUNK_OVERLAP = 220;
-const MAX_BOOK_CONTEXT_CHUNKS = 8;
+const MAX_BOOK_CONTEXT_CHUNKS = 100;
 const MAX_GLOBAL_BOOKS = 4;
 const MAX_GLOBAL_CHUNKS_PER_BOOK = 4;
 
@@ -1411,6 +1411,19 @@ function NotesPanel({dirHandle,bookId,profileId,otherProfiles,onNotesPresenceCha
     onToast?.("Nota excluída");
   };
 
+  const exportNotes=()=>{
+    if(!myNotes.length) return;
+    const txt = myNotes.map((n,i)=>(
+      `Nota ${i+1} — ${new Date(n.updatedAt).toLocaleString("pt-BR")}\n${"─".repeat(40)}\n${n.text}`
+    )).join("\n\n");
+    const blob = new Blob([`Notas — ${profileId}\n${"═".repeat(40)}\n\n${txt}`],{type:"text/plain"});
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `notas_${bookId}_${profileId}.txt`;
+    a.click();
+    onToast?.("Notas exportadas");
+  };
+
   if(!ready) return null;
 
   const renderOwnSection = () => (
@@ -1465,6 +1478,15 @@ function NotesPanel({dirHandle,bookId,profileId,otherProfiles,onNotesPresenceCha
       <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:6,gap:10,flexWrap:"wrap"}}>
         <div style={{...lb,display:"flex",alignItems:"center",gap:6}}>
           <Ico d={D.note} sz={11}/> Notas
+          {myNotes.length > 0 && (
+            <button
+              onClick={exportNotes}
+              title="Exportar notas"
+              style={{...bI,padding:"2px 6px",marginLeft:4,display:"flex",alignItems:"center",gap:4,fontSize:11}}
+            >
+              <Ico d={D.dl} sz={11}/> Exportar
+            </button>
+          )}
         </div>
 
         <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
@@ -2318,6 +2340,20 @@ function Sidebar({
   onDeleteBook
 }){
   const booksScrollRef=useRef(null);
+  const [sortKey,setSortKey]=useState("addedAt");
+  const [showSortMenu,setShowSortMenu]=useState(false);
+
+  const sortedBooks=useMemo(()=>{
+    const arr=[...filteredBooks];
+    arr.sort((a,b)=>{
+      let av=a[sortKey]||"", bv=b[sortKey]||"";
+      if(typeof av==="string") av=av.toLocaleLowerCase("pt-BR");
+      if(typeof bv==="string") bv=bv.toLocaleLowerCase("pt-BR");
+      if(sortKey==="addedAt") return av>bv?-1:av<bv?1:0;
+      return av>bv?1:av<bv?-1:0;
+    });
+    return arr;
+  },[filteredBooks,sortKey]);
 
   return(
     <aside
@@ -2493,17 +2529,56 @@ function Sidebar({
           <div style={{...sbLb,display:"flex",alignItems:"center",gap:4}}>
             <Ico d={D.book} sz={10}/> Biblioteca
           </div>
-          {hasActiveFilter && filteredBooks.length !== books.length && (
-            <span style={{fontSize:10,color:C.sbInkF,fontWeight:600}}>
-              {filteredBooks.length} de {books.length}
-            </span>
-          )}
+          <div style={{display:"flex",alignItems:"center",gap:6}}>
+            {hasActiveFilter && filteredBooks.length !== books.length && (
+              <span style={{fontSize:10,color:C.sbInkF,fontWeight:600}}>
+                {filteredBooks.length} de {books.length}
+              </span>
+            )}
+            <div style={{position:"relative"}}>
+              <button
+                onClick={()=>setShowSortMenu(p=>!p)}
+                title="Ordenar biblioteca"
+                style={{background:"none",border:"none",cursor:"pointer",color:C.sbInk,display:"flex",padding:2}}
+              >
+                <Ico d={D.list} sz={11}/>
+              </button>
+              {showSortMenu && (
+                <div style={{
+                  position:"absolute",right:0,top:"calc(100% + 4px)",
+                  background:"#1e3554",border:"1px solid #2d4a6e",
+                  borderRadius:8,padding:"4px 0",zIndex:100,
+                  boxShadow:"0 8px 24px rgba(0,0,0,.4)",minWidth:160
+                }}>
+                  {[
+                    {id:"addedAt", label:"Data de inclusão"},
+                    {id:"title",   label:"Alfabético"},
+                    {id:"author",  label:"Autor"},
+                    {id:"category",label:"Categoria"}
+                  ].map(({id,label})=>(
+                    <button
+                      key={id}
+                      onClick={()=>{ setSortKey(id); setShowSortMenu(false); }}
+                      style={{
+                        width:"100%",textAlign:"left",padding:"8px 14px",
+                        background:sortKey===id?"rgba(255,255,255,.1)":"none",
+                        border:"none",cursor:"pointer",
+                        color:C.sbInk,fontSize:12,fontWeight:sortKey===id?700:500
+                      }}
+                    >
+                      {sortKey===id ? "✓ " : "   "}{label}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
         </div>
       </div>
 
       {/* AJUSTE 4: animação de livros mais fluida com CSS transition em vez de animation keyframe por índice */}
       <div ref={booksScrollRef} className="inner-scroll" style={{flex:1,minHeight:0,overflowY:"auto",padding:"6px 0 12px 9px"}}>
-        {filteredBooks.map((b)=>{
+        {sortedBooks.map((b)=>{
           const isActive = selBook?.id===b.id && screen==="book";
           return (
             <div
@@ -2614,7 +2689,7 @@ function Sidebar({
           );
         })}
 
-        {!filteredBooks.length && (
+        {!sortedBooks.length && (
           <p style={{fontSize:13,color:C.sbInkF,padding:"10px 4px"}}>
             {books.length===0 ? "Nenhum livro ainda." : "Sem resultados."}
           </p>
