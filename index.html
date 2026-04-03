@@ -23,6 +23,10 @@ html,body,#root {
 
 body { color:#1a1614; }
 
+input, textarea, select, button {
+  font-family: 'Inter', sans-serif;
+}
+
 * {
   scrollbar-width: thin;
   scrollbar-color: rgba(0,0,0,.25) transparent;
@@ -4157,27 +4161,44 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
                   {selBook.pages ? <span style={{fontSize:13,color:C.inkF}}>{selBook.pages} pág.</span> : null}
                   {(selBook.category || selBook.pages) && (selBook.tags||[]).length > 0 ? <span style={{fontSize:12,color:C.inkF}}>•</span> : null}
                   {(selBook.tags||[]).length > 0 ? <span style={{fontSize:13,color:C.inkF}}>Tags: {(selBook.tags||[]).join(", ")}</span> : null}
-                  {/* Badge: modo semântico ativo ou decisão do automático */}
-                  {bookEmbeddings && openaiKey && !autoDecision && chatMode === "auto" && (
-                    <span style={{fontSize:11,padding:"2px 8px",borderRadius:10,background:"rgba(30,92,46,.1)",color:"#1e5c2e",border:"1px solid rgba(30,92,46,.22)",fontWeight:600}}>
-                      ✦ automático
-                    </span>
-                  )}
-                  {autoDecision && (
-                    <span style={{
-                      fontSize:11,padding:"2px 8px",borderRadius:10,fontWeight:600,
-                      background: autoDecision.mode==="deep" ? "rgba(32,110,171,.1)" : "rgba(30,92,46,.1)",
-                      color: autoDecision.mode==="deep" ? "#206eab" : "#1e5c2e",
-                      border: `1px solid ${autoDecision.mode==="deep" ? "rgba(32,110,171,.22)" : "rgba(30,92,46,.22)"}`
-                    }}>
-                      {autoDecision.mode==="deep" ? "🔍" : "⚡"} Automático: {autoDecision.uiLabel}
-                    </span>
-                  )}
-                  {/* Badge de geração de índice semântico em background */}
+
+                  {/* Separador antes do modo */}
+                  <span style={{fontSize:12,color:C.inkF}}>•</span>
+
+                  {/* Badge de modo — atualiza após decisão */}
+                  {(()=>{
+                    let label, bg, ink, brd;
+                    if(autoDecision){
+                      const sub = autoDecision.mode === "deep" ? "Profundo" : "Básico";
+                      label = `Modo: Automático - ${sub}`;
+                      bg = autoDecision.mode === "deep" ? "rgba(32,110,171,.1)" : "rgba(30,92,46,.1)";
+                      ink = autoDecision.mode === "deep" ? "#206eab" : "#1e5c2e";
+                      brd = autoDecision.mode === "deep" ? "rgba(32,110,171,.22)" : "rgba(30,92,46,.22)";
+                    } else if(chatMode === "auto"){
+                      label = "Modo: Automático";
+                      bg = "rgba(30,92,46,.1)"; ink = "#1e5c2e"; brd = "rgba(30,92,46,.22)";
+                    } else if(chatMode === "deep"){
+                      label = "Modo: Profundo";
+                      bg = "rgba(32,110,171,.1)"; ink = "#206eab"; brd = "rgba(32,110,171,.22)";
+                    } else {
+                      label = "Modo: Básico";
+                      bg = "rgba(45,107,228,.08)"; ink = C.accent; brd = C.accentBrd;
+                    }
+                    return (
+                      <span style={{fontSize:11,padding:"2px 8px",borderRadius:10,fontWeight:600,background:bg,color:ink,border:`1px solid ${brd}`}}>
+                        {label}
+                      </span>
+                    );
+                  })()}
+
+                  {/* Badge de geração de índice semântico — ao lado do modo */}
                   {generatingEmbeddings && (
-                    <span style={{fontSize:11,padding:"2px 8px",borderRadius:10,background:"rgba(122,90,26,.08)",color:C.gold,border:`1px solid ${C.goldBrd}`,fontWeight:600,display:"flex",alignItems:"center",gap:4}}>
-                      ⟳ gerando índice semântico…
-                    </span>
+                    <>
+                      <span style={{fontSize:12,color:C.inkF}}>•</span>
+                      <span style={{fontSize:11,padding:"2px 8px",borderRadius:10,background:"rgba(122,90,26,.08)",color:C.gold,border:`1px solid ${C.goldBrd}`,fontWeight:600,display:"flex",alignItems:"center",gap:4}}>
+                        ⟳ gerando índice semântico…
+                      </span>
+                    </>
                   )}
                 </div>
               </div>
