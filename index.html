@@ -3255,6 +3255,8 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
   const [selectedCategory,setSelectedCategory] = useState("");
   const [modal,setModal] = useState(null);
   const [editBook,setEditBook] = useState(null);
+  const editBookRef = useRef(null);
+  useEffect(()=>{ editBookRef.current = editBook; }, [editBook]);
   const [wishModal,setWishModal] = useState(false);
   const [wishEdit,setWishEdit] = useState(null);
   const [pendingFile,setPendingFile] = useState(null);
@@ -3551,7 +3553,7 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
   };
 
   const doEdit=async(fd)=>{
-    const targetBook = editBook || selBook;
+    const targetBook = editBookRef.current || selBookRef.current;
     if(!targetBook) return;
 
     const normalizedCategory = normalizeCategory(fd.category);
@@ -3564,10 +3566,14 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
     const finalCategory = nextCats.includes(normalizedCategory) ? normalizedCategory : "";
     const nextTags = normalizeTags(fd.tags);
 
-    const nb=books.map(b=>b.id===targetBook.id ? {...b,...fd,category:finalCategory,tags:nextTags} : b);
-    setBooks(nb);
+    let nb;
+    setBooks(prev => {
+      nb = prev.map(b => b.id===targetBook.id ? {...b,...fd,category:finalCategory,tags:nextTags} : b);
+      return nb;
+    });
+    await new Promise(r => setTimeout(r, 0));
 
-    if(selBook?.id===targetBook.id){
+    if(selBookRef.current?.id===targetBook.id){
       setSelBook(p=>({...p,...fd,category:finalCategory,tags:nextTags}));
     }
 
