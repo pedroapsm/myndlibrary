@@ -251,6 +251,12 @@ function sanitizeSynthesisText(text=""){
   return sanitizeSynopsisText(text);
 }
 
+function sanitizeSummaryText(text=""){
+  return text
+    .replace(/[,;]\s*$/, "")
+    .trim();
+}
+
 function renderSynopsis(text=""){
   const comma = text.indexOf(",");
   if(comma === -1 || comma > 120) return <span>{text}</span>;
@@ -753,8 +759,10 @@ async function rebuildConceptsIndex(dirHandle, books, apiKey, existingIndex={}){
     }
   }
 
-  // Gera resumo 1 linha para todos os conceitos sem summary (novos ou existentes sem definição)
-  const needsSummary = Object.entries(newIndex).filter(([c, v]) => !v.summary);
+  // Gera resumo para conceitos sem summary ou com summary malformado (termina com , ou ;)
+  const needsSummary = Object.entries(newIndex).filter(([c, v]) =>
+    !v.summary || /[,;]\s*$/.test(v.summary)
+  );
   if(needsSummary.length > 0 && apiKey){
     // Processa em lotes de 20 para evitar resposta muito longa do modelo
     const BATCH = 20;
@@ -764,7 +772,7 @@ async function rebuildConceptsIndex(dirHandle, books, apiKey, existingIndex={}){
       try{
         const resp = await callClaude(
           apiKey,
-          `Para cada conceito listado, escreva uma frase curta (máx 12 palavras) em português descrevendo o que é. Retorne APENAS JSON válido no formato: {"conceito": "resumo"}. Sem markdown, sem texto extra, sem comentários.`,
+          `Para cada conceito listado, escreva uma frase curta (máx 10 palavras) em português descrevendo o que é. A frase deve ser completa, sem terminar com vírgula, ponto e vírgula ou texto cortado. Retorne APENAS JSON válido no formato: {"conceito": "resumo"}. Sem markdown, sem texto extra, sem comentários.`,
           [{ role:"user", content:conceptList }],
           800
         );
@@ -772,7 +780,7 @@ async function rebuildConceptsIndex(dirHandle, books, apiKey, existingIndex={}){
         const summaries = JSON.parse(clean);
         for(const [concept, summary] of Object.entries(summaries)){
           const key = concept.toLowerCase().trim();
-          if(newIndex[key]) newIndex[key].summary = summary;
+          if(newIndex[key]) newIndex[key].summary = sanitizeSummaryText(String(summary||""));
         }
       }catch(e){
         console.warn("Summaries batch falhou:", e.message);
@@ -3783,7 +3791,7 @@ function ConnectionsPage({
               style={{
                 textAlign:"left",background:C.surf,border:`1px solid ${C.border}`,borderRadius:10,
                 padding:"16px 18px",cursor:"pointer",transition:"border-color .15s,box-shadow .15s",
-                height:96,display:"flex",flexDirection:"column",justifyContent:"flex-start"
+                height:104,display:"flex",flexDirection:"column",justifyContent:"flex-start"
               }}
               onMouseEnter={e=>{
                 e.currentTarget.style.borderColor = C.accentBrd;
