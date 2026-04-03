@@ -753,11 +753,8 @@ async function rebuildConceptsIndex(dirHandle, books, apiKey, existingIndex={}){
     }
   }
 
-  // Gera resumo 1 linha apenas para conceitos NOVOS (não existiam no índice anterior)
-  // Conceitos já existentes preservam o summary sem chamar Claude
-  const needsSummary = Object.entries(newIndex).filter(([c, v]) =>
-    !v.summary && !existingIndex[c]?.summary
-  );
+  // Gera resumo 1 linha para todos os conceitos sem summary (novos ou existentes sem definição)
+  const needsSummary = Object.entries(newIndex).filter(([c, v]) => !v.summary);
   if(needsSummary.length > 0 && apiKey){
     const conceptList = needsSummary.map(([c]) => c).join(", ");
     try{
