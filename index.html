@@ -3291,7 +3291,7 @@ function Sidebar({
       <div style={{padding:"10px 10px 8px",borderBottom:`1px solid ${C.sbBorder}`,flexShrink:0}}>
         {[
           {id:"home",label:"Página inicial",icon:D.home,fn:()=>setScreen("home")},
-          {id:"global",label:"Pesquisa geral",icon:D.globe,fn:openGlobal},
+          {id:"global",label:"Pesquisa na biblioteca",icon:D.globe,fn:openGlobal},
           {id:"connections",label:"Conexões",icon:D.link,fn:openConnections},
         ].map(({id,label,icon,fn})=>(
           <button
@@ -5232,8 +5232,8 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
   ];
 
   const WelcomeGlobal=()=>(
-    <div style={{background:C.surf,border:`1px solid ${C.border}`,borderRadius:10,padding:"20px 24px"}}>
-      <p style={{fontSize:15,color:C.inkD,lineHeight:1.7}}>
+    <div style={{background:C.surf,border:`1px solid ${C.border}`,borderRadius:10,padding:"14px 18px"}}>
+      <p style={{fontSize:13,color:C.inkD,lineHeight:1.6}}>
         Faça perguntas que cruzam múltiplos livros. A IA sempre indica de qual obra vem cada informação.
         {globalLoading && <em style={{color:C.inkF}}> Carregando…</em>}
       </p>
@@ -5401,7 +5401,7 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
               <button style={bI} onClick={()=>setScreen("home")}><Ico d={D.back} sz={15}/></button>
               <div style={{flex:1}}>
                 <div style={{fontSize:21,fontWeight:700,color:C.ink,display:"flex",alignItems:"center",gap:8}}>
-                  <Ico d={D.globe} sz={19} col={C.accent}/> Pesquisa geral
+                  <Ico d={D.globe} sz={19} col={C.accent}/> Pesquisa na biblioteca
                 </div>
                 <div style={{display:"flex",flexWrap:"wrap",gap:8,rowGap:4,marginTop:6,alignItems:"center"}}>
                   {/* Toggle Geral / Por categoria */}
