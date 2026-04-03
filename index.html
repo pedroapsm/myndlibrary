@@ -2801,8 +2801,8 @@ function SaveInsightModal({ onSave, onClose, msg, apiKey }){
 
 // ─── InsightsSavedModal ────────────────────────────────
 
-function InsightsSavedModal({ bookInsights, onClose, onRemove }){
-  const [selected, setSelected] = useState(null);
+function InsightsSavedModal({ bookInsights, onClose, onRemove, initialSelected=null }){
+  const [selected, setSelected] = useState(initialSelected);
 
   return(
     <div style={ov} onClick={e=>{ if(e.target===e.currentTarget) onClose(); }}>
@@ -4302,7 +4302,7 @@ function InsightsPage({ insights, insightEmbeddings, openaiKey, cats, profiles }
 
 // ─── ConversasInsights ────────────────────────────────
 
-function ConversasInsights({ chatSessions, insights, selBook, activeChatId, userName, selectChat, deleteChat, newChat, toggleInsight, setShowInsightsModal }){
+function ConversasInsights({ chatSessions, insights, selBook, activeChatId, userName, selectChat, deleteChat, newChat, toggleInsight, setShowInsightsModal, onOpenInsight }){
   const [open, setOpen] = useState(false);
   const bookInsights = insights.filter(ins=>ins.bookId===selBook.id);
 
@@ -4318,13 +4318,16 @@ function ConversasInsights({ chatSessions, insights, selBook, activeChatId, user
         }}
       >
         <Ico d={open ? D.chevDown : D.play} sz={10} col={C.inkF}/>
-        <span style={{...lb, fontSize:10}}>Conversas anteriores</span>
-        {chatSessions.length > 0 && <span style={{fontSize:10,color:C.inkF,fontWeight:400}}>({chatSessions.length})</span>}
-        <span style={{...lb, fontSize:10, marginLeft:8, color:C.inkF}}>·</span>
-        <span style={{color:"#e05c7a", fontSize:11}}>♥</span>
-        <span style={{...lb, fontSize:10}}>Insights</span>
-        {bookInsights.length > 0 && <span style={{fontSize:10,color:C.inkF,fontWeight:400}}>({bookInsights.length})</span>}
-        <span style={{flex:1}}/>
+        <div style={{display:"flex", alignItems:"center", gap:5, width:"calc(50% - 8px)"}}>
+          <Ico d={D.chat} sz={11} col={C.inkF}/>
+          <span style={{...lb}}>Conversas anteriores</span>
+          {chatSessions.length > 0 && <span style={{fontSize:10,color:C.inkF,fontWeight:400}}>({chatSessions.length})</span>}
+        </div>
+        <div style={{display:"flex", alignItems:"center", gap:5, flex:1}}>
+          <span style={{color:"#e05c7a", fontSize:12}}>♥</span>
+          <span style={{...lb}}>Insights</span>
+          {bookInsights.length > 0 && <span style={{fontSize:10,color:C.inkF,fontWeight:400}}>({bookInsights.length})</span>}
+        </div>
         {open && (
           <button onClick={e=>{ e.stopPropagation(); newChat(); }} style={{background:"none",border:"none",cursor:"pointer",color:C.accent,fontSize:12,display:"flex",alignItems:"center",gap:3,fontWeight:600,padding:0}}>
             <Ico d={D.plus} sz={11}/> Nova
@@ -4377,7 +4380,7 @@ function ConversasInsights({ chatSessions, insights, selBook, activeChatId, user
                   <div key={ins.id} style={{display:"flex",alignItems:"center",gap:8,padding:"6px 4px",borderBottom:`1px solid ${C.borderL}`,cursor:"pointer"}}
                     onMouseEnter={e=>e.currentTarget.style.background=C.card}
                     onMouseLeave={e=>e.currentTarget.style.background="none"}
-                    onClick={()=>setShowInsightsModal(true)}
+                    onClick={()=>onOpenInsight(ins)}
                   >
                     <span style={{color:"#e05c7a",fontSize:12,flexShrink:0}}>♥</span>
                     <span style={{flex:1,fontSize:13,fontWeight:600,color:C.inkD,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{ins.insightName||"Sem nome"}</span>
@@ -4450,6 +4453,7 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
   const [insightEmbeddings,setInsightEmbeddings] = useState({});
   const [insightsLoaded,setInsightsLoaded] = useState(false);
   const [showInsightsModal,setShowInsightsModal] = useState(false);
+  const [selectedInsight,setSelectedInsight] = useState(null);
 
   const [searchQ,setSearchQ] = useState("");
   const [searchDraft,setSearchDraft] = useState("");
@@ -5992,16 +5996,19 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
               newChat={newChat}
               toggleInsight={toggleInsight}
               setShowInsightsModal={setShowInsightsModal}
+              onOpenInsight={(ins)=>{ setSelectedInsight(ins); setShowInsightsModal(true); }}
             />
 
             {showInsightsModal && (
               <InsightsSavedModal
                 bookInsights={insights.filter(ins=>ins.bookId===selBook.id)}
-                onClose={()=>setShowInsightsModal(false)}
+                initialSelected={selectedInsight}
+                onClose={()=>{ setShowInsightsModal(false); setSelectedInsight(null); }}
                 onRemove={(insightId)=>{
                   const ins = insights.find(i=>i.id===insightId);
                   if(ins) toggleInsight({id:ins.messageId, content:ins.answerText}, selBook);
                   setShowInsightsModal(false);
+                  setSelectedInsight(null);
                 }}
               />
             )}
