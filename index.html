@@ -3262,6 +3262,8 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
           ...book,
           tags: normalizeTags(book.tags),
           category: validSet.has(fixedCategory) ? fixedCategory : "",
+          embeddingsStatus: book.embeddingsStatus ?? "pending",
+          synopsisStatus: book.synopsisStatus ?? "pending",
           _hasNotes:hasNotes,
           _hasChats:hasChats
         };
@@ -4189,12 +4191,20 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
                     );
                   })()}
 
-                  {/* Badge de geração de índice semântico — ao lado do modo */}
-                  {generatingEmbeddings && (
+                  {/* Badge de índice semântico — pendente ou ativo */}
+                  {selBook && !bookEmbeddings && selBook.embeddingsStatus !== "done" && (
                     <>
                       <span style={{fontSize:12,color:C.inkF}}>•</span>
                       <span style={{fontSize:11,padding:"2px 8px",borderRadius:10,background:"rgba(122,90,26,.08)",color:C.gold,border:`1px solid ${C.goldBrd}`,fontWeight:600,display:"flex",alignItems:"center",gap:4}}>
-                        ⟳ gerando índice semântico…
+                        {generatingEmbeddings ? "⟳ gerando índice semântico…" : "⟳ índice semântico pendente"}
+                      </span>
+                    </>
+                  )}
+                  {selBook && bookEmbeddings && selBook.embeddingsStatus === "done" && (
+                    <>
+                      <span style={{fontSize:12,color:C.inkF}}>•</span>
+                      <span style={{fontSize:11,padding:"2px 8px",borderRadius:10,background:"rgba(30,92,46,.1)",color:"#1e5c2e",border:"1px solid rgba(30,92,46,.22)",fontWeight:600,display:"flex",alignItems:"center",gap:4}}>
+                        <Ico d={D.check} sz={11} col="#1e5c2e"/> Índice semântico ativo
                       </span>
                     </>
                   )}
