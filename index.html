@@ -98,6 +98,13 @@ const MAX_BOOK_CONTEXT_CHUNKS = 100;
 const MAX_GLOBAL_BOOKS = 4;
 const MAX_GLOBAL_CHUNKS_PER_BOOK = 4;
 
+// ─── Auto Mode Constants (calibrar com uso real) ───────
+// Todos os valores são provisórios — observar logs no console para ajustar.
+const AUTO_CONFIDENCE_THRESHOLD = 0.30; // score mínimo para chunk ser considerado forte
+const AUTO_MIN_STRONG_CHUNKS    = 3;    // mínimo de chunks fortes para qualidade "high"
+const AUTO_SCORE_DROP_RATIO     = 0.50; // chunk[1] < chunk[0] * ratio = queda brusca
+const AUTO_MAX_POSITION_SPREAD  = 0.70; // chunks espalhados em mais de 70% do livro
+
 // ─── Utils ─────────────────────────────────────────────
 
 const uid = () => (
@@ -463,6 +470,217 @@ async function semanticSelectChunks(chunks, embeddings, queryEmbedding, maxChunk
   return scored
     .slice(0, maxChunks)
     .sort((a, b) => a.index - b.index);
+}
+
+// ─── Auto Mode Logic ──────────────────────────────────
+
+// Classifica a intenção da pergunta em 3 estados.
+// "global"    → exige visão ampla do livro (tese, síntese, comparação, evolução)
+// "local"     → pergunta pontual, factual, conceitual
+// "ambiguous" → não é possível determinar com segurança
+function classifyQueryIntent(query=""){
+  const q = query.toLocaleLowerCase("pt-BR").trim();
+
+  const globalSignals = [
+    // síntese e visão geral
+    /\btese\b/, /\bargumento\b/, /\bproposta\b/, /\bideia central\b/, /\btema central\b/,
+    /\btodo o livro\b/, /\bao longo\b/, /\bpercurso\b/, /\btrajetória\b/,
+    /\bdo início ao fim\b/, /\bdo começo ao fim\b/,
+    // comparação e estrutura
+    /\bcompare\b/, /\bcompar[aeo]\b/, /\bcontraste\b/, /\bdiferença entre\b/,
+    /\bsemelhanç\b/, /\brelação entre\b/, /\bcomo evolui\b/, /\bevolução\b/,
+    // temas e padrões
+    /\btemas recorrentes\b/, /\bpadrões\b/, /\bcontradição\b/, /\bparadoxo\b/,
+    /\bestilo do autor\b/, /\bvoz do autor\b/, /\bnarrativa\b/,
+    // resumo / síntese explícita
+    /\bfaça um resumo\b/, /\bresuma o livro\b/, /\bsíntese\b/, /\bvisão geral\b/,
+    /\bprincipais mensagens\b/, /\bprincipais aprendizados\b/, /\bprincipais lições\b/,
+    /\bde que trata\b/, /\bdo que trata\b/, /\bsobre o que é\b/,
+    // estrutura narrativa
+    /\barcos\b/, /\barco narrativo\b/, /\bestrutura do livro\b/, /\bcapítulos\b/
+  ];
+
+  const localSignals = [
+    /\bo que (é|significa|define)\b/, /\bquem (é|foi|são)\b/,
+    /\bonde\b/, /\bquando\b/, /\bcomo funciona\b/, /\bcomo se chama\b/,
+    /\bexplique\b/, /\bdefin[ae]\b/, /\bcite\b/, /\bexemplo de\b/,
+    /\bquanto\b/, /\bquantos\b/, /\bpor que\b/, /\bpor quê\b/
+  ];
+
+  const globalScore = globalSignals.filter(re => re.test(q)).length;
+  const localScore  = localSignals.filter(re => re.test(q)).length;
+
+  if(globalScore >= 2) return "global";
+  if(globalScore === 1 && localScore === 0) return "global";
+  if(localScore >= 1 && globalScore === 0) return "local";
+  return "ambiguous";
+}
+
+// Analisa a qualidade do retrieval semântico.
+// Recebe chunks já ordenados por score decrescente (top N).
+// Retorna quality: "high" | "borderline" | "low" + métricas para debug.
+function analyzeRetrievalQuality(scoredChunks=[], totalChunks=1){
+  if(!scoredChunks.length){
+    return {
+      quality:"low", avgTop5:0, strongChunkCount:0,
+      scoreDropRatio:0, positionSpread:0, topScores:[], reason:"sem chunks"
+    };
+  }
+
+  const top5 = scoredChunks.slice(0, 5);
+  const topScores = top5.map(c => parseFloat((c.score||0).toFixed(4)));
+
+  // 1. Média dos top 5
+  const avgTop5 = topScores.reduce((s,v)=>s+v, 0) / topScores.length;
+
+  // 2. Chunks fortes (score >= threshold)
+  const strongChunkCount = topScores.filter(s => s >= AUTO_CONFIDENCE_THRESHOLD).length;
+
+  // 3. Queda brusca entre chunk[0] e chunk[1]
+  const scoreDropRatio = topScores.length >= 2 && topScores[0] > 0
+    ? topScores[1] / topScores[0]
+    : 1;
+
+  // 4. Dispersão de posição: (posMax - posMin) / totalChunks
+  const positions = scoredChunks.slice(0, 5).map(c => c.index || 0);
+  const positionSpread = totalChunks > 1
+    ? (Math.max(...positions) - Math.min(...positions)) / totalChunks
+    : 0;
+
+  // ── Classificar qualidade ──────────────────────────
+  // "high": média boa E chunks fortes suficientes
+  const isHigh = avgTop5 >= AUTO_CONFIDENCE_THRESHOLD
+    && strongChunkCount >= AUTO_MIN_STRONG_CHUNKS;
+
+  // "low": média ruim E poucos chunks fortes
+  const isLow = avgTop5 < AUTO_CONFIDENCE_THRESHOLD
+    && strongChunkCount < AUTO_MIN_STRONG_CHUNKS;
+
+  // scoreDropRatio baixo é agravante para borderline → low
+  // (só pesa combinado com outros sinais fracos, nunca sozinho)
+  const hasAbruptDrop = scoreDropRatio < AUTO_SCORE_DROP_RATIO;
+
+  let quality, reason;
+  if(isHigh){
+    quality = "high";
+    reason = `avg=${avgTop5.toFixed(3)}, strong=${strongChunkCount}`;
+  } else if(isLow){
+    quality = "low";
+    reason = `avg=${avgTop5.toFixed(3)}, strong=${strongChunkCount}`;
+  } else {
+    // borderline — pode ser promovido a low por queda brusca combinada
+    if(hasAbruptDrop && avgTop5 < AUTO_CONFIDENCE_THRESHOLD){
+      quality = "low";
+      reason = `borderline→low: drop=${scoreDropRatio.toFixed(2)}, avg=${avgTop5.toFixed(3)}`;
+    } else {
+      quality = "borderline";
+      reason = `avg=${avgTop5.toFixed(3)}, strong=${strongChunkCount}, drop=${scoreDropRatio.toFixed(2)}`;
+    }
+  }
+
+  return { quality, avgTop5, strongChunkCount, scoreDropRatio, positionSpread, topScores, reason };
+}
+
+// Orquestra a decisão de modo no Automático.
+// Retorna { mode: "basic"|"deep", intent, quality, uiLabel, reason }
+// uiLabel é o texto curto para o badge na UI.
+async function decideAutoMode(query, bookText, bookEmbeddings, openaiKey, bookHasPdf){
+  const intent = classifyQueryIntent(query);
+  const canDeep = bookHasPdf; // extensível: aqui entra qualidade do texto no futuro
+
+  // ── Passo 1: intenção global ──────────────────────
+  if(intent === "global"){
+    if(canDeep){
+      const result = { mode:"deep", intent, quality:null, uiLabel:"visão global", reason:"intenção global detectada" };
+      console.log("[Automático]", { query, ...result });
+      return result;
+    } else {
+      const result = { mode:"basic", intent, quality:null, uiLabel:"deep indisponível", reason:"intenção global mas PDF não disponível" };
+      console.log("[Automático]", { query, ...result });
+      return result;
+    }
+  }
+
+  // ── Passo 2: tenta básico e avalia qualidade ──────
+  let scoredChunks = [];
+  let totalChunks = 1;
+
+  if(bookEmbeddings && openaiKey){
+    try{
+      const queryEmbedding = await generateEmbedding(query, openaiKey);
+      const allChunks = splitTextIntoChunks(bookText);
+      totalChunks = allChunks.length || 1;
+
+      // Pontua todos os chunks para análise (não limita aqui)
+      const contentMap = {};
+      for(const c of allChunks) contentMap[c.index] = c;
+
+      scoredChunks = bookEmbeddings
+        .map(e => ({
+          ...contentMap[e.index],
+          score: cosineSimilarity(queryEmbedding, e.embedding)
+        }))
+        .filter(c => c.content)
+        .sort((a,b) => b.score - a.score);
+    }catch(err){
+      console.warn("[Automático] Erro ao gerar embedding:", err.message);
+    }
+  }
+
+  const analysis = analyzeRetrievalQuality(scoredChunks, totalChunks);
+
+  // Log completo para calibração
+  console.log("[Automático]", {
+    query, intent,
+    avgTop5: analysis.avgTop5,
+    strongChunkCount: analysis.strongChunkCount,
+    scoreDropRatio: analysis.scoreDropRatio,
+    positionSpread: analysis.positionSpread,
+    topScores: analysis.topScores,
+    quality: analysis.quality,
+    qualityReason: analysis.reason
+  });
+
+  // ── Passo 3: decisão por intent + qualidade ───────
+  // local: high ou borderline → basic; low → deep
+  if(intent === "local"){
+    if(analysis.quality === "low" && canDeep){
+      const result = { mode:"deep", intent, quality:analysis.quality, uiLabel:"visão global", reason:`local mas retrieval fraco: ${analysis.reason}` };
+      console.log("[Automático] decisão:", result.mode, result.reason);
+      return result;
+    }
+    const result = { mode:"basic", intent, quality:analysis.quality, uiLabel:"trechos relevantes", reason:`local, qualidade ${analysis.quality}` };
+    console.log("[Automático] decisão:", result.mode, result.reason);
+    return result;
+  }
+
+  // ambiguous: high → basic; low → deep; borderline + spread alto → deep
+  if(intent === "ambiguous"){
+    if(analysis.quality === "high"){
+      const result = { mode:"basic", intent, quality:analysis.quality, uiLabel:"trechos relevantes", reason:`ambíguo, qualidade alta` };
+      console.log("[Automático] decisão:", result.mode, result.reason);
+      return result;
+    }
+    if(analysis.quality === "low" && canDeep){
+      const result = { mode:"deep", intent, quality:analysis.quality, uiLabel:"visão global", reason:`ambíguo, retrieval fraco: ${analysis.reason}` };
+      console.log("[Automático] decisão:", result.mode, result.reason);
+      return result;
+    }
+    // borderline: spread alto é desempate
+    if(analysis.quality === "borderline" && analysis.positionSpread > AUTO_MAX_POSITION_SPREAD && canDeep){
+      const result = { mode:"deep", intent, quality:analysis.quality, uiLabel:"visão global", reason:`ambíguo, borderline + fragmentado (spread=${analysis.positionSpread.toFixed(2)})` };
+      console.log("[Automático] decisão:", result.mode, result.reason);
+      return result;
+    }
+    const result = { mode:"basic", intent, quality:analysis.quality, uiLabel:"trechos relevantes", reason:`ambíguo, borderline sem spread decisivo` };
+    console.log("[Automático] decisão:", result.mode, result.reason);
+    return result;
+  }
+
+  // fallback seguro
+  const result = { mode:"basic", intent, quality:analysis.quality, uiLabel:"trechos relevantes", reason:"fallback" };
+  console.log("[Automático] decisão:", result.mode, result.reason);
+  return result;
 }
 
 // ─── IndexedDB ────────────────────────────────────────
@@ -1652,6 +1870,7 @@ function NotesPanel({dirHandle,bookId,profileId,otherProfiles,onNotesPresenceCha
 // ─── ChatArea ──────────────────────────────────────────
 
 const MODE_TOOLTIPS = {
+  auto:  "Decide automaticamente entre trechos ou visão global com base na pergunta e qualidade do retrieval.",
   basic: "Busca semântica com embeddings. Seleciona os trechos mais relevantes do livro.",
   deep:  "Envia o livro completo para o Claude. Respostas mais precisas e abrangentes."
 };
@@ -1659,12 +1878,15 @@ const MODE_TOOLTIPS = {
 function ModeToggle({mode, setMode, deepDisabled}){
   const [tooltip,setTooltip]=useState(null);
 
+  const modes = [
+    {id:"auto",  label:"✦ Automático"},
+    {id:"basic", label:"⚡ Básico"},
+    {id:"deep",  label:"🔍 Profundo", disabled:deepDisabled}
+  ];
+
   return(
     <div style={{display:"flex",gap:4,alignItems:"center",marginBottom:8,position:"relative",zIndex:10}}>
-      {[
-        {id:"basic", label:"⚡ Básico"},
-        {id:"deep",  label:"🔍 Profundo", disabled:deepDisabled}
-      ].map(({id,label,disabled})=>(
+      {modes.map(({id,label,disabled})=>(
         <div key={id} style={{position:"relative"}}>
           <button
             disabled={disabled}
@@ -2858,6 +3080,7 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
   const [selBook,setSelBook] = useState(null);
   const [bookText,setBookText] = useState("");
   const [bookEmbeddings,setBookEmbeddings] = useState(null); // embeddings do livro aberto
+  const [autoDecision,setAutoDecision] = useState(null);     // última decisão do modo automático
   const [bookMsgs,setBookMsgs] = useState([]);
   const [chatSessions,setChatSessions] = useState([]);
   const [otherSessions,setOtherSessions] = useState({});
@@ -2872,9 +3095,9 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
   const [chatLoading,setChatLoading] = useState(false);
   const [globalLoading,setGlobalLoading] = useState(false);
   const [openingBook,setOpeningBook] = useState(false);
-  const [chatMode,setChatMode] = useState("basic");
+  const [chatMode,setChatMode] = useState("auto");
   const [bookHasPdf,setBookHasPdf] = useState(false);
-  const [globalChatMode,setGlobalChatMode] = useState("basic");
+  const [globalChatMode,setGlobalChatMode] = useState("auto");
 
   const [searchQ,setSearchQ] = useState("");
   const [searchDraft,setSearchDraft] = useState("");
@@ -3303,7 +3526,8 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
     setOtherSessions({});
     setActiveChatId(null);
     setBookEmbeddings(null);
-    setChatMode("basic");
+    setAutoDecision(null);
+    setChatMode("auto");
 
     await bumpStat(freshBook.id);
 
@@ -3462,12 +3686,28 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
     const next=[...bookMsgs,mkM("user",txt)];
     setBookMsgs(next);
     setChatLoading(true);
+    setAutoDecision(null);
 
     try{
       let r;
 
-      if(chatMode==="deep" && bookHasPdf){
-        // Modo Profundo: envia o PDF completo (inalterado)
+      // ── Resolver modo efetivo ──────────────────────────────
+      let effectiveMode = chatMode;
+      let decision = null;
+
+      if(chatMode === "auto"){
+        decision = await decideAutoMode(txt, bookText, bookEmbeddings, openaiKey, bookHasPdf);
+        setAutoDecision(decision);
+        effectiveMode = decision.mode;
+      }
+
+      // ── Modo Profundo ──────────────────────────────────────
+      if(effectiveMode === "deep" && bookHasPdf){
+        // Prefixo transparente se veio do automático
+        const autoNote = decision
+          ? `🔍 *Automático: usando visão global — ${decision.reason}*\n\n`
+          : "";
+
         const pdfHandle = await dirHandle.getFileHandle(`${selBook.id}.pdf`);
         const pdfFile = await pdfHandle.getFile();
         const pdfBuffer = await pdfFile.arrayBuffer();
@@ -3501,14 +3741,21 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
           const e=await response.json().catch(()=>({}));
           throw new Error(e?.error?.message || `HTTP ${response.status}`);
         }
-        r=(await response.json()).content?.[0]?.text || "Sem resposta.";
+        const raw = (await response.json()).content?.[0]?.text || "Sem resposta.";
+        r = autoNote + raw;
 
       }else{
-        // ── Modo Básico: busca semântica com embeddings ──────────
-        let chunks;
+        // ── Modo Básico: busca semântica com embeddings ────────
+        // Se chegou aqui pelo automático com decisão "deep" mas sem PDF,
+        // o autoNote avisa o usuário.
+        const autoNote = (decision && decision.mode === "deep" && !bookHasPdf)
+          ? `⚠️ *Automático: visão global recomendada mas PDF indisponível — usando trechos.*\n\n`
+          : "";
 
+        let chunks;
         if(bookEmbeddings && openaiKey){
-          // Caminho semântico: gera embedding da query e usa cosine similarity
+          // Se o auto já calculou os chunks pontuados internamente, reaproveitamos
+          // gerando o embedding da query de novo (custo mínimo, garante consistência)
           const queryEmbedding = await generateEmbedding(txt, openaiKey);
           const allChunks = splitTextIntoChunks(bookText);
           chunks = await semanticSelectChunks(allChunks, bookEmbeddings, queryEmbedding, MAX_BOOK_CONTEXT_CHUNKS);
@@ -3518,7 +3765,8 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
         }
 
         const system = buildBookContextPrompt(selBook.title, txt, chunks);
-        r = await callClaude(apiKey, system, next);
+        const raw = await callClaude(apiKey, system, next);
+        r = autoNote + raw;
       }
 
       const final=[...next,mkM("assistant",r)];
@@ -3725,10 +3973,20 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
                   {selBook.pages ? <span style={{fontSize:13,color:C.inkF}}>{selBook.pages} pág.</span> : null}
                   {(selBook.category || selBook.pages) && (selBook.tags||[]).length > 0 ? <span style={{fontSize:12,color:C.inkF}}>•</span> : null}
                   {(selBook.tags||[]).length > 0 ? <span style={{fontSize:13,color:C.inkF}}>Tags: {(selBook.tags||[]).join(", ")}</span> : null}
-                  {/* Badge indicando se busca semântica está ativa */}
-                  {bookEmbeddings && openaiKey && (
+                  {/* Badge: modo semântico ativo ou decisão do automático */}
+                  {bookEmbeddings && openaiKey && !autoDecision && chatMode === "auto" && (
                     <span style={{fontSize:11,padding:"2px 8px",borderRadius:10,background:"rgba(30,92,46,.1)",color:"#1e5c2e",border:"1px solid rgba(30,92,46,.22)",fontWeight:600}}>
-                      ✦ semântico
+                      ✦ automático
+                    </span>
+                  )}
+                  {autoDecision && (
+                    <span style={{
+                      fontSize:11,padding:"2px 8px",borderRadius:10,fontWeight:600,
+                      background: autoDecision.mode==="deep" ? "rgba(32,110,171,.1)" : "rgba(30,92,46,.1)",
+                      color: autoDecision.mode==="deep" ? "#206eab" : "#1e5c2e",
+                      border: `1px solid ${autoDecision.mode==="deep" ? "rgba(32,110,171,.22)" : "rgba(30,92,46,.22)"}`
+                    }}>
+                      {autoDecision.mode==="deep" ? "🔍" : "⚡"} Automático: {autoDecision.uiLabel}
                     </span>
                   )}
                 </div>
