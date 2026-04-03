@@ -2786,7 +2786,8 @@ function Sidebar({
   setModal,
   fileRef,
   handleFilePick,
-  onDeleteBook
+  onDeleteBook,
+  onEditBook
 }){
   const booksScrollRef=useRef(null);
   const [sortKey,setSortKey]=useState("addedAt");
@@ -3097,37 +3098,67 @@ function Sidebar({
                     {b._hasNotes && <div style={{fontSize:10,color:"#c7e4ff"}}>Notas</div>}
                   </div>
 
-                  <button
-                    onClick={(e)=>{
-                      e.stopPropagation();
-                      onDeleteBook(b);
-                    }}
-                    style={{
-                      background:"none",
-                      border:"1px solid rgba(255,255,255,.16)",
-                      color:"rgba(255,255,255,.72)",
-                      padding:"4px 6px",
-                      borderRadius:5,
-                      cursor:"pointer",
-                      fontSize:10.5,
-                      display:"flex",
-                      alignItems:"center",
-                      flexShrink:0,
-                      transition:"background .15s, color .15s, border-color .15s"
-                    }}
-                    onMouseEnter={e=>{
-                      e.currentTarget.style.background = "rgba(200,50,50,.25)";
-                      e.currentTarget.style.borderColor = "rgba(220,80,80,.6)";
-                      e.currentTarget.style.color = "#ff9090";
-                    }}
-                    onMouseLeave={e=>{
-                      e.currentTarget.style.background = "none";
-                      e.currentTarget.style.borderColor = "rgba(255,255,255,.16)";
-                      e.currentTarget.style.color = "rgba(255,255,255,.72)";
-                    }}
-                  >
-                    <Ico d={D.trash} sz={11} col="currentColor"/>
-                  </button>
+                  <div style={{display:"flex",gap:4,flexShrink:0}}>
+                    <button
+                      onClick={(e)=>{
+                        e.stopPropagation();
+                        onEditBook(b);
+                      }}
+                      style={{
+                        background:"none",
+                        border:"1px solid rgba(255,255,255,.16)",
+                        color:"rgba(255,255,255,.72)",
+                        padding:"4px 6px",
+                        borderRadius:5,
+                        cursor:"pointer",
+                        display:"flex",
+                        alignItems:"center",
+                        transition:"background .15s, color .15s, border-color .15s"
+                      }}
+                      onMouseEnter={e=>{
+                        e.currentTarget.style.background = "rgba(255,255,255,.12)";
+                        e.currentTarget.style.borderColor = "rgba(255,255,255,.4)";
+                        e.currentTarget.style.color = "#fff";
+                      }}
+                      onMouseLeave={e=>{
+                        e.currentTarget.style.background = "none";
+                        e.currentTarget.style.borderColor = "rgba(255,255,255,.16)";
+                        e.currentTarget.style.color = "rgba(255,255,255,.72)";
+                      }}
+                    >
+                      <Ico d={D.edit} sz={11} col="currentColor"/>
+                    </button>
+
+                    <button
+                      onClick={(e)=>{
+                        e.stopPropagation();
+                        onDeleteBook(b);
+                      }}
+                      style={{
+                        background:"none",
+                        border:"1px solid rgba(255,255,255,.16)",
+                        color:"rgba(255,255,255,.72)",
+                        padding:"4px 6px",
+                        borderRadius:5,
+                        cursor:"pointer",
+                        display:"flex",
+                        alignItems:"center",
+                        transition:"background .15s, color .15s, border-color .15s"
+                      }}
+                      onMouseEnter={e=>{
+                        e.currentTarget.style.background = "rgba(200,50,50,.25)";
+                        e.currentTarget.style.borderColor = "rgba(220,80,80,.6)";
+                        e.currentTarget.style.color = "#ff9090";
+                      }}
+                      onMouseLeave={e=>{
+                        e.currentTarget.style.background = "none";
+                        e.currentTarget.style.borderColor = "rgba(255,255,255,.16)";
+                        e.currentTarget.style.color = "rgba(255,255,255,.72)";
+                      }}
+                    >
+                      <Ico d={D.trash} sz={11} col="currentColor"/>
+                    </button>
+                  </div>
                 </div>
               </div>
             </div>
@@ -4157,6 +4188,7 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
         fileRef={fileRef}
         handleFilePick={handleFilePick}
         onDeleteBook={doDelete}
+        onEditBook={b=>{ setEditBook(b); setModal({type:"edit",initial:b}); }}
       />
 
       <main style={{flex:1,overflow:"hidden",display:"flex",flexDirection:"column",background:C.bg}}>
