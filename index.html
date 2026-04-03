@@ -3646,7 +3646,7 @@ function ConnectionsPage({
   // ── Detalhe do conceito ──
   if(selConcept){
     const entry = conceptsIndex[selConcept];
-    const relatedBooks = conceptDetail?.relatedBooks || (entry?.books||[]).map(id=>bookMap[id]).filter(Boolean);
+    const relatedBooks = (entry?.books||[]).map(id=>bookMap[id]).filter(Boolean);
 
     return(
       <div className="inner-scroll" style={{flex:1,overflowY:"auto",padding:"28px 40px"}}>
@@ -4673,13 +4673,8 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
       setConceptsIndex(fullIndex);
       setConceptsProcessing(false);
 
-    } else if(Object.keys(existing).length > 0){
-      // Índice já existe e não há pendentes — carrega direto sem reconstruir
-      setConceptsIndex(existing);
-      setConceptsLoading(false);
-
     } else {
-      // Índice não existe ainda — reconstrói uma vez
+      // Nenhum livro pendente — reconstrói sempre para garantir IDs atuais
       const index = await rebuildConceptsIndex(dirHandle, books, apiKey, existing);
       setConceptsIndex(index);
       setConceptsLoading(false);
