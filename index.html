@@ -2691,7 +2691,7 @@ function ChatHistory({sessions,otherSessions,activeId,onSelect,onNew,onDelete,ot
             onMouseLeave={e=>e.currentTarget.style.color=C.inkF}
             title="Excluir conversa"
           >
-            <Ico d={D.trash} sz={11} col="currentColor"/>
+            <Ico d={D.trash} sz={14} col="currentColor"/>
           </button>
         )}
       </div>
@@ -4464,16 +4464,9 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
     }
     setOtherSessions(others);
 
-    const lastId=localStorage.getItem(`mynd_lastChat_${freshBook.id}`);
-    const last=sessions.find(s=>s.id===lastId);
-
-    if(last){
-      setBookMsgs(last.messages);
-      setActiveChatId(last.id);
-    }else{
-      setBookMsgs([]);
-      setActiveChatId(null);
-    }
+    // Sempre abre conversa nova ao entrar no livro
+    setBookMsgs([]);
+    setActiveChatId(null);
 
     setOpeningBook(false);
 
