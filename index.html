@@ -2542,6 +2542,7 @@ function ModeToggle({mode, setMode, deepDisabled}){
 
 function ChatArea({messages,loading,onSend,placeholder,emptyNode,onExport,mode,setMode,deepDisabled,onToggleInsight,savedMessageIds=new Set()}){
   const [input,setInput]=useState("");
+  const [pendingInsightMsg,setPendingInsightMsg]=useState(null);
   const endRef=useRef();
   const inputRef=useRef();
 
@@ -2600,13 +2601,19 @@ function ChatArea({messages,loading,onSend,placeholder,emptyNode,onExport,mode,s
             </div>
 
             <div style={{position:"relative",maxWidth:"100%"}}>
-              {/* Coração — só em mensagens do assistente com id */}
+              {/* Coração — canto inferior direito, só em mensagens do assistente com id */}
               {m.role==="assistant" && m.id && onToggleInsight && (
                 <button
-                  onClick={()=>onToggleInsight(m)}
+                  onClick={()=>{
+                    if(savedMessageIds.has(m.id)){
+                      onToggleInsight(m, null); // remove direto
+                    } else {
+                      setPendingInsightMsg(m); // abre modal para nome
+                    }
+                  }}
                   title={savedMessageIds.has(m.id) ? "Remover insight" : "Salvar como insight"}
                   style={{
-                    position:"absolute",top:6,right:6,
+                    position:"absolute",bottom:6,right:6,
                     background:"none",border:"none",cursor:"pointer",
                     fontSize:14,lineHeight:1,padding:2,zIndex:1,
                     color: savedMessageIds.has(m.id) ? "#e05c7a" : C.inkF,
@@ -2694,48 +2701,161 @@ function ChatArea({messages,loading,onSend,placeholder,emptyNode,onExport,mode,s
           </div>
         </div>
       </div>
+
+      {pendingInsightMsg && (
+        <SaveInsightModal
+          onSave={(name)=>{
+            onToggleInsight(pendingInsightMsg, name);
+            setPendingInsightMsg(null);
+          }}
+          onClose={()=>setPendingInsightMsg(null)}
+        />
+      )}
     </>
   );
 }
 
-// ─── BookInsights ─────────────────────────────────────
+// ─── SaveInsightModal ─────────────────────────────────
 
-function BookInsights({ bookId, insights, profiles, onRemove }){
-  const bookInsights = insights.filter(ins => ins.bookId === bookId);
-  if(!bookInsights.length) return null;
+function SaveInsightModal({ onSave, onClose }){
+  const [name, setName] = useState("");
+  const inputRef = useRef();
+
+  useEffect(()=>{ setTimeout(()=>inputRef.current?.focus(), 50); },[]);
 
   return(
-    <div style={{padding:"8px 28px 0", borderTop:`1px solid ${C.border}`}}>
-      <div style={{...lb, marginBottom:8, display:"flex", alignItems:"center", gap:5}}>
-        <span style={{fontSize:12}}>♥</span> Insights deste livro
-        <span style={{fontSize:10, color:C.inkF, fontWeight:400, marginLeft:2}}>({bookInsights.length})</span>
+    <div style={ov} onClick={e=>{ if(e.target===e.currentTarget) onClose(); }}>
+      <div style={{...mb, width:400, maxHeight:"none"}}>
+        <div style={{fontSize:17, fontWeight:700, color:C.ink, marginBottom:16, display:"flex", alignItems:"center", gap:8}}>
+          ♥ Salvar insight
+        </div>
+        <div style={{...lb, marginBottom:6}}>Nome do insight</div>
+        <input
+          ref={inputRef}
+          value={name}
+          onChange={e=>setName(e.target.value)}
+          onKeyDown={e=>{ if(e.key==="Enter" && name.trim()) onSave(name.trim()); }}
+          placeholder="Ex: Putin e a desconfiança dos EUA"
+          style={{...fi, marginBottom:18}}
+        />
+        <div style={{display:"flex", gap:10, justifyContent:"flex-end"}}>
+          <button style={bG} onClick={onClose}>Cancelar</button>
+          <button style={bP(!name.trim())} disabled={!name.trim()} onClick={()=>onSave(name.trim())}>
+            Salvar
+          </button>
+        </div>
       </div>
-      <div style={{display:"flex", flexDirection:"column", gap:6, maxHeight:160, overflowY:"auto"}} className="inner-scroll">
-        {bookInsights.map(ins=>(
-          <div key={ins.id} style={{background:C.card, border:`1px solid ${C.border}`, borderRadius:7, padding:"8px 12px", position:"relative"}}>
-            <div style={{fontSize:13, color:C.inkD, lineHeight:1.6, paddingRight:20,
-              overflow:"hidden", display:"-webkit-box", WebkitLineClamp:2, WebkitBoxOrient:"vertical"
-            }}>
-              {ins.answerText}
+    </div>
+  );
+}
+
+// ─── InsightsSavedModal ────────────────────────────────
+
+function InsightsSavedModal({ bookInsights, onClose, onRemove }){
+  const [selected, setSelected] = useState(null);
+
+  return(
+    <div style={ov} onClick={e=>{ if(e.target===e.currentTarget) onClose(); }}>
+      <div style={{...mb, width:580, maxHeight:"80vh", display:"flex", flexDirection:"column"}}>
+        <div style={{display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:16}}>
+          <div style={{fontSize:18, fontWeight:700, color:C.ink, display:"flex", alignItems:"center", gap:8}}>
+            ♥ Insights salvos <span style={{fontSize:13, color:C.inkF, fontWeight:400}}>({bookInsights.length})</span>
+          </div>
+          <button onClick={onClose} style={{...bI, padding:"5px"}}><Ico d={D.close} sz={14}/></button>
+        </div>
+
+        {bookInsights.length === 0 ? (
+          <p style={{fontSize:14, color:C.inkF, fontStyle:"italic"}}>Nenhum insight salvo ainda.</p>
+        ) : (
+          <div style={{display:"flex", gap:12, flex:1, overflow:"hidden", minHeight:0}}>
+            <div className="inner-scroll" style={{width:220, minWidth:220, overflowY:"auto", display:"flex", flexDirection:"column", gap:4}}>
+              {bookInsights.map(ins=>(
+                <button
+                  key={ins.id}
+                  onClick={()=>setSelected(ins)}
+                  style={{
+                    textAlign:"left", padding:"8px 10px", borderRadius:7, flexShrink:0,
+                    border:`1px solid ${selected?.id===ins.id ? C.accentBrd : C.border}`,
+                    background:selected?.id===ins.id ? C.accentBg : C.card,
+                    cursor:"pointer"
+                  }}
+                >
+                  <div style={{fontSize:12, fontWeight:600, color:selected?.id===ins.id ? C.accent : C.inkD, marginBottom:3, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap"}}>
+                    {ins.insightName || "Sem nome"}
+                  </div>
+                  <div style={{fontSize:11, color:C.inkF}}>{ins.profileId} · {new Date(ins.savedAt).toLocaleDateString("pt-BR")}</div>
+                </button>
+              ))}
             </div>
-            <div style={{display:"flex", alignItems:"center", gap:8, marginTop:4}}>
-              <span style={{fontSize:10, color:C.inkF}}>{ins.profileId}</span>
-              <span style={{fontSize:10, color:C.inkF}}>·</span>
-              <span style={{fontSize:10, color:C.inkF}}>{new Date(ins.savedAt).toLocaleDateString("pt-BR")}</span>
+            <div className="inner-scroll" style={{flex:1, overflowY:"auto"}}>
+              {selected ? (
+                <div style={{background:C.bg, border:`1px solid ${C.border}`, borderRadius:9, padding:"14px 16px"}}>
+                  <div style={{display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:10}}>
+                    <div style={{fontSize:13, fontWeight:700, color:C.ink}}>{selected.insightName || "Sem nome"}</div>
+                    <div style={{display:"flex", gap:6}}>
+                      <button onClick={()=>{ onRemove(selected.id); setSelected(null); }} style={{...bI, padding:"4px 8px", color:C.red, borderColor:C.red+"44"}}>
+                        <Ico d={D.trash} sz={12}/>
+                      </button>
+                    </div>
+                  </div>
+                  <p style={{fontSize:13, color:C.inkD, lineHeight:1.7, whiteSpace:"pre-wrap"}}>{selected.answerText}</p>
+                  <div style={{fontSize:11, color:C.inkF, marginTop:10}}>{selected.profileId} · {new Date(selected.savedAt).toLocaleDateString("pt-BR")}</div>
+                </div>
+              ) : (
+                <p style={{fontSize:13, color:C.inkF, fontStyle:"italic", padding:"8px 0"}}>Selecione um insight para ver o conteúdo.</p>
+              )}
             </div>
-            {onRemove && (
-              <button
-                onClick={()=>onRemove(ins.id)}
-                style={{position:"absolute", top:6, right:6, background:"none", border:"none", cursor:"pointer", color:C.inkF, padding:2, display:"flex"}}
-                onMouseEnter={e=>e.currentTarget.style.color=C.red}
-                onMouseLeave={e=>e.currentTarget.style.color=C.inkF}
-                title="Remover insight"
-              >
-                <Ico d={D.close} sz={11} col="currentColor"/>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── BookInsights (lado direito do layout) ────────────
+
+function BookInsights({ bookId, insights, onRemove, onShowModal }){
+  const bookInsights = insights.filter(ins => ins.bookId === bookId);
+  const total = bookInsights.length;
+
+  return(
+    <div style={{flex:1, minWidth:0, display:"flex", flexDirection:"column"}}>
+      <div style={{display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:8}}>
+        <div style={{...lb, display:"flex", alignItems:"center", gap:5}}>
+          <span style={{fontSize:12}}>♥</span> Insights
+        </div>
+        <button
+          onClick={onShowModal}
+          style={{...bI, padding:"2px 8px", display:"flex", alignItems:"center", gap:4, fontSize:11,
+            background: total > 0 ? "rgba(224,92,122,.08)" : "none",
+            borderColor: total > 0 ? "rgba(224,92,122,.28)" : C.border,
+            color: total > 0 ? "#e05c7a" : C.inkF
+          }}
+        >
+          <span style={{fontSize:11}}>♥</span> Insights salvos {total > 0 && `(${total})`}
+        </button>
+      </div>
+
+      <div style={{background:C.surf, border:`1px solid ${C.border}`, borderRadius:8, padding:"8px 10px", flex:1, overflowY:"auto", minHeight:58}} className="inner-scroll">
+        {bookInsights.length === 0 ? (
+          <p style={{fontSize:13, color:C.inkF, fontStyle:"italic", lineHeight:1.6}}>Nenhum insight salvo ainda.</p>
+        ) : (
+          <div style={{display:"flex", flexDirection:"column", gap:6}}>
+            {bookInsights.slice(0,3).map(ins=>(
+              <div key={ins.id} style={{borderBottom:`1px solid ${C.borderL}`, paddingBottom:6, lastChild:{borderBottom:"none"}}}>
+                <div style={{fontSize:12, fontWeight:600, color:C.inkD, marginBottom:2, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap"}}>
+                  {ins.insightName || "Sem nome"}
+                </div>
+                <div style={{fontSize:11, color:C.inkF}}>{ins.profileId} · {new Date(ins.savedAt).toLocaleDateString("pt-BR")}</div>
+              </div>
+            ))}
+            {bookInsights.length > 3 && (
+              <button onClick={onShowModal} style={{background:"none",border:"none",cursor:"pointer",color:C.accent,fontSize:12,textAlign:"left",padding:0}}>
+                +{bookInsights.length - 3} mais…
               </button>
             )}
           </div>
-        ))}
+        )}
       </div>
     </div>
   );
@@ -4165,6 +4285,7 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
   const [insights,setInsights] = useState([]);
   const [insightEmbeddings,setInsightEmbeddings] = useState({});
   const [insightsLoaded,setInsightsLoaded] = useState(false);
+  const [showInsightsModal,setShowInsightsModal] = useState(false);
 
   const [searchQ,setSearchQ] = useState("");
   const [searchDraft,setSearchDraft] = useState("");
@@ -5448,7 +5569,7 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
     }
   };
 
-  const toggleInsight=async(msg, book)=>{
+  const toggleInsight=async(msg, book, insightName="")=>{
     if(!msg?.id || !book) return;
     const existing = insights.find(ins => ins.messageId === msg.id);
 
@@ -5457,7 +5578,6 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
       const next = insights.filter(ins => ins.messageId !== msg.id);
       setInsights(next);
       await saveInsights(dirHandle, userName, next);
-      // Remove embedding se existir
       if(insightEmbeddings[existing.id]){
         const nextEmbs = {...insightEmbeddings};
         delete nextEmbs[existing.id];
@@ -5466,7 +5586,6 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
       }
       pushToast("Insight removido");
     } else {
-      // Salva insight imediatamente
       const insight = {
         id: uid(),
         profileId: userName,
@@ -5476,6 +5595,7 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
         bookCategory: book.category || "",
         bookAuthor: book.author || "",
         messageId: msg.id,
+        insightName: insightName || "",
         answerText: msg.content
       };
       const next = [insight, ...insights];
@@ -5483,7 +5603,6 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
       await saveInsights(dirHandle, userName, next);
       pushToast("Insight salvo");
 
-      // Gera embedding em background se tiver OpenAI key
       if(openaiKey){
         generateEmbedding(msg.content, openaiKey)
           .then(async emb => {
@@ -5698,15 +5817,29 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
               onRegenerateSynopsis={()=>handleRetry("synopsisStatus")}
             />
 
-            <BookInsights
-              bookId={selBook.id}
-              insights={insights}
-              profiles={[userName,...otherProfiles]}
-              onRemove={(insightId)=>{
-                const ins = insights.find(i=>i.id===insightId);
-                if(ins) toggleInsight({id:ins.messageId, content:ins.answerText}, selBook);
-              }}
-            />
+            <div style={{padding:"10px 28px 8px", display:"flex", gap:16, alignItems:"stretch"}}>
+              <BookInsights
+                bookId={selBook.id}
+                insights={insights}
+                onRemove={(insightId)=>{
+                  const ins = insights.find(i=>i.id===insightId);
+                  if(ins) toggleInsight({id:ins.messageId, content:ins.answerText}, selBook);
+                }}
+                onShowModal={()=>setShowInsightsModal(true)}
+              />
+            </div>
+
+            {showInsightsModal && (
+              <InsightsSavedModal
+                bookInsights={insights.filter(ins=>ins.bookId===selBook.id)}
+                onClose={()=>setShowInsightsModal(false)}
+                onRemove={(insightId)=>{
+                  const ins = insights.find(i=>i.id===insightId);
+                  if(ins) toggleInsight({id:ins.messageId, content:ins.answerText}, selBook);
+                  setShowInsightsModal(false);
+                }}
+              />
+            )}
 
             <ChatHistory
               sessions={chatSessions}
@@ -5735,7 +5868,7 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
               mode={chatMode}
               setMode={setChatMode}
               deepDisabled={!bookCanUseDeep}
-              onToggleInsight={selBook ? (msg)=>toggleInsight(msg,selBook) : null}
+              onToggleInsight={selBook ? (msg, name)=>toggleInsight(msg, selBook, name) : null}
               savedMessageIds={new Set(insights.filter(ins=>ins.bookId===selBook?.id).map(ins=>ins.messageId))}
             />
           </div>
