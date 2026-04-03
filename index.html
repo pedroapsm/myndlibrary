@@ -1,3 +1,6 @@
+
+
+
 <!DOCTYPE html>
 <html lang="pt-BR">
 <head>
@@ -4587,8 +4590,15 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
     // Se já tem índice em memória e não há novos livros sem conceitos, exibe direto
     const alreadyLoaded = Object.keys(conceptsIndex).length > 0;
     const allDone = books.every(b => b.conceptsStatus === "done");
-    if(alreadyLoaded && allDone){
-      return; // tudo em memória, nada a fazer
+
+    // Verifica se todos os livros atuais estão representados no índice em memória
+    const indexedBookIds = new Set(
+      Object.values(conceptsIndex).flatMap(e => e.books || [])
+    );
+    const allBooksIndexed = books.every(b => indexedBookIds.has(b.id));
+
+    if(alreadyLoaded && allDone && allBooksIndexed){
+      return; // tudo em memória e consistente, nada a fazer
     }
 
     setConceptsLoading(true);
