@@ -4300,6 +4300,103 @@ function InsightsPage({ insights, insightEmbeddings, openaiKey, cats, profiles }
   );
 }
 
+// ─── ConversasInsights ────────────────────────────────
+
+function ConversasInsights({ chatSessions, insights, selBook, activeChatId, userName, selectChat, deleteChat, newChat, toggleInsight, setShowInsightsModal }){
+  const [open, setOpen] = useState(false);
+  const bookInsights = insights.filter(ins=>ins.bookId===selBook.id);
+
+  return(
+    <>
+      <button
+        onClick={()=>setOpen(p=>!p)}
+        style={{
+          width:"100%", display:"flex", alignItems:"center", gap:8,
+          padding:"6px 28px",
+          background:"none", border:"none", borderTop:`1px solid ${C.border}`,
+          cursor:"pointer", textAlign:"left"
+        }}
+      >
+        <Ico d={open ? D.chevDown : D.play} sz={10} col={C.inkF}/>
+        <span style={{...lb, fontSize:10}}>Conversas anteriores</span>
+        {chatSessions.length > 0 && <span style={{fontSize:10,color:C.inkF,fontWeight:400}}>({chatSessions.length})</span>}
+        <span style={{...lb, fontSize:10, marginLeft:8, color:C.inkF}}>·</span>
+        <span style={{color:"#e05c7a", fontSize:11}}>♥</span>
+        <span style={{...lb, fontSize:10}}>Insights</span>
+        {bookInsights.length > 0 && <span style={{fontSize:10,color:C.inkF,fontWeight:400}}>({bookInsights.length})</span>}
+        <span style={{flex:1}}/>
+        {open && (
+          <button onClick={e=>{ e.stopPropagation(); newChat(); }} style={{background:"none",border:"none",cursor:"pointer",color:C.accent,fontSize:12,display:"flex",alignItems:"center",gap:3,fontWeight:600,padding:0}}>
+            <Ico d={D.plus} sz={11}/> Nova
+          </button>
+        )}
+        {open && bookInsights.length > 0 && (
+          <button onClick={e=>{ e.stopPropagation(); setShowInsightsModal(true); }} style={{...bI, padding:"2px 8px", display:"flex", alignItems:"center", gap:4, fontSize:11, marginLeft:8}}>
+            <span style={{color:"#e05c7a", fontSize:11}}>♥</span> Insights salvos
+          </button>
+        )}
+      </button>
+
+      {open && (
+        <div style={{padding:"0 28px 8px", display:"flex", gap:16}}>
+          {/* Conversas */}
+          <div style={{width:"calc(50% - 8px)", minWidth:0}}>
+            {chatSessions.length === 0 ? (
+              <p style={{fontSize:13,color:C.inkF,fontStyle:"italic",padding:"4px 0"}}>Nenhuma conversa ainda.</p>
+            ) : (
+              <div className="inner-scroll" style={{display:"flex",flexDirection:"column",maxHeight:140,overflowY:"auto"}}>
+                {chatSessions.map(s=>{
+                  const isActive = s.id===activeChatId;
+                  return(
+                    <div key={s.id} style={{display:"flex",alignItems:"center",gap:8,padding:"6px 4px",borderBottom:`1px solid ${C.borderL}`,cursor:"pointer"}}
+                      onMouseEnter={e=>e.currentTarget.style.background=C.card}
+                      onMouseLeave={e=>e.currentTarget.style.background="none"}
+                      onClick={()=>selectChat(s)}
+                    >
+                      <Ico d={D.chat} sz={11} col={isActive?C.accent:C.inkF}/>
+                      <span style={{flex:1,fontSize:13,fontWeight:isActive?600:400,color:isActive?C.accent:C.inkD,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{s.title||"Sem título"}</span>
+                      <span style={{fontSize:11,color:C.inkF,flexShrink:0,whiteSpace:"nowrap"}}>{userName}</span>
+                      <span style={{fontSize:11,color:C.inkF,flexShrink:0,whiteSpace:"nowrap"}}>{s.date}</span>
+                      <button onClick={e=>{ e.stopPropagation(); deleteChat(s.id); }} style={{background:"none",border:"none",cursor:"pointer",color:C.inkF,display:"flex",padding:2,flexShrink:0}} onMouseEnter={e=>e.currentTarget.style.color=C.red} onMouseLeave={e=>e.currentTarget.style.color=C.inkF}>
+                        <Ico d={D.trash} sz={13} col="currentColor"/>
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          {/* Insights */}
+          <div style={{width:"calc(50% - 8px)", minWidth:0}}>
+            {bookInsights.length === 0 ? (
+              <p style={{fontSize:13,color:C.inkF,fontStyle:"italic",padding:"4px 0"}}>Nenhum insight salvo ainda.</p>
+            ) : (
+              <div className="inner-scroll" style={{display:"flex",flexDirection:"column",maxHeight:140,overflowY:"auto"}}>
+                {bookInsights.map(ins=>(
+                  <div key={ins.id} style={{display:"flex",alignItems:"center",gap:8,padding:"6px 4px",borderBottom:`1px solid ${C.borderL}`,cursor:"pointer"}}
+                    onMouseEnter={e=>e.currentTarget.style.background=C.card}
+                    onMouseLeave={e=>e.currentTarget.style.background="none"}
+                    onClick={()=>setShowInsightsModal(true)}
+                  >
+                    <span style={{color:"#e05c7a",fontSize:12,flexShrink:0}}>♥</span>
+                    <span style={{flex:1,fontSize:13,fontWeight:600,color:C.inkD,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{ins.insightName||"Sem nome"}</span>
+                    <span style={{fontSize:11,color:C.inkF,flexShrink:0,whiteSpace:"nowrap"}}>{ins.profileId}</span>
+                    <span style={{fontSize:11,color:C.inkF,flexShrink:0,whiteSpace:"nowrap"}}>{new Date(ins.savedAt).toLocaleDateString("pt-BR")}</span>
+                    <button onClick={e=>{ e.stopPropagation(); const i=insights.find(x=>x.id===ins.id); if(i) toggleInsight({id:i.messageId,content:i.answerText},selBook); }} style={{background:"none",border:"none",cursor:"pointer",color:C.inkF,display:"flex",padding:2,flexShrink:0}} onMouseEnter={e=>e.currentTarget.style.color=C.red} onMouseLeave={e=>e.currentTarget.style.color=C.inkF}>
+                      <Ico d={D.trash} sz={13} col="currentColor"/>
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
 // ─── Library ──────────────────────────────────────────
 
 function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}){
@@ -5884,109 +5981,18 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
               onRegenerateSynopsis={()=>handleRetry("synopsisStatus")}
             />
 
-            {(()=>{
-              const bookInsights = insights.filter(ins=>ins.bookId===selBook.id);
-              const totalItems = chatSessions.length + bookInsights.length;
-              const [open, setOpen] = React.useState(false);
-
-              return(
-                <>
-                  {/* ── Header colapsável ── */}
-                  <button
-                    onClick={()=>setOpen(p=>!p)}
-                    style={{
-                      width:"100%", display:"flex", alignItems:"center", gap:8,
-                      padding:"6px 28px", borderTop:`1px solid ${C.border}`,
-                      background:"none", border:"none", borderTop:`1px solid ${C.border}`,
-                      cursor:"pointer", textAlign:"left"
-                    }}
-                  >
-                    <Ico d={open ? D.chevDown : D.play} sz={10} col={C.inkF}/>
-                    <span style={{...lb, fontSize:10}}>Conversas anteriores</span>
-                    {chatSessions.length > 0 && <span style={{fontSize:10,color:C.inkF,fontWeight:400}}>({chatSessions.length})</span>}
-                    <span style={{...lb, fontSize:10, marginLeft:8, color:C.inkF}}>·</span>
-                    <span style={{color:"#e05c7a", fontSize:11}}>♥</span>
-                    <span style={{...lb, fontSize:10}}>Insights</span>
-                    {bookInsights.length > 0 && <span style={{fontSize:10,color:C.inkF,fontWeight:400}}>({bookInsights.length})</span>}
-                    <span style={{flex:1}}/>
-                    {open && (
-                      <button
-                        onClick={e=>{ e.stopPropagation(); newChat(); }}
-                        style={{background:"none",border:"none",cursor:"pointer",color:C.accent,fontSize:12,display:"flex",alignItems:"center",gap:3,fontWeight:600,padding:0}}
-                      >
-                        <Ico d={D.plus} sz={11}/> Nova
-                      </button>
-                    )}
-                    {open && bookInsights.length > 0 && (
-                      <button
-                        onClick={e=>{ e.stopPropagation(); setShowInsightsModal(true); }}
-                        style={{...bI, padding:"2px 8px", display:"flex", alignItems:"center", gap:4, fontSize:11, marginLeft:8}}
-                      >
-                        <span style={{color:"#e05c7a", fontSize:11}}>♥</span> Insights salvos
-                      </button>
-                    )}
-                  </button>
-
-                  {/* ── Conteúdo colapsável ── */}
-                  {open && (
-                    <div style={{padding:"0 28px 8px", display:"flex", gap:16}}>
-                      {/* Conversas */}
-                      <div style={{width:"calc(50% - 8px)", minWidth:0}}>
-                        {chatSessions.length === 0 ? (
-                          <p style={{fontSize:13,color:C.inkF,fontStyle:"italic",padding:"4px 0"}}>Nenhuma conversa ainda.</p>
-                        ) : (
-                          <div className="inner-scroll" style={{display:"flex",flexDirection:"column",maxHeight:140,overflowY:"auto"}}>
-                            {chatSessions.map(s=>{
-                              const isActive = s.id===activeChatId;
-                              return(
-                                <div key={s.id} style={{display:"flex",alignItems:"center",gap:8,padding:"6px 4px",borderBottom:`1px solid ${C.borderL}`,cursor:"pointer"}}
-                                  onMouseEnter={e=>e.currentTarget.style.background=C.card}
-                                  onMouseLeave={e=>e.currentTarget.style.background="none"}
-                                  onClick={()=>selectChat(s)}
-                                >
-                                  <Ico d={D.chat} sz={11} col={isActive?C.accent:C.inkF}/>
-                                  <span style={{flex:1,fontSize:13,fontWeight:isActive?600:400,color:isActive?C.accent:C.inkD,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{s.title||"Sem título"}</span>
-                                  <span style={{fontSize:11,color:C.inkF,flexShrink:0,whiteSpace:"nowrap"}}>{userName}</span>
-                                  <span style={{fontSize:11,color:C.inkF,flexShrink:0,whiteSpace:"nowrap"}}>{s.date}</span>
-                                  <button onClick={e=>{ e.stopPropagation(); deleteChat(s.id); }} style={{background:"none",border:"none",cursor:"pointer",color:C.inkF,display:"flex",padding:2,flexShrink:0}} onMouseEnter={e=>e.currentTarget.style.color=C.red} onMouseLeave={e=>e.currentTarget.style.color=C.inkF}>
-                                    <Ico d={D.trash} sz={13} col="currentColor"/>
-                                  </button>
-                                </div>
-                              );
-                            })}
-                          </div>
-                        )}
-                      </div>
-
-                      {/* Insights */}
-                      <div style={{width:"calc(50% - 8px)", minWidth:0}}>
-                        {bookInsights.length === 0 ? (
-                          <p style={{fontSize:13,color:C.inkF,fontStyle:"italic",padding:"4px 0"}}>Nenhum insight salvo ainda.</p>
-                        ) : (
-                          <div className="inner-scroll" style={{display:"flex",flexDirection:"column",maxHeight:140,overflowY:"auto"}}>
-                            {bookInsights.map(ins=>(
-                              <div key={ins.id} style={{display:"flex",alignItems:"center",gap:8,padding:"6px 4px",borderBottom:`1px solid ${C.borderL}`,cursor:"pointer"}}
-                                onMouseEnter={e=>e.currentTarget.style.background=C.card}
-                                onMouseLeave={e=>e.currentTarget.style.background="none"}
-                                onClick={()=>setShowInsightsModal(true)}
-                              >
-                                <span style={{color:"#e05c7a",fontSize:12,flexShrink:0}}>♥</span>
-                                <span style={{flex:1,fontSize:13,fontWeight:600,color:C.inkD,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{ins.insightName||"Sem nome"}</span>
-                                <span style={{fontSize:11,color:C.inkF,flexShrink:0,whiteSpace:"nowrap"}}>{ins.profileId}</span>
-                                <span style={{fontSize:11,color:C.inkF,flexShrink:0,whiteSpace:"nowrap"}}>{new Date(ins.savedAt).toLocaleDateString("pt-BR")}</span>
-                                <button onClick={e=>{ e.stopPropagation(); const i=insights.find(x=>x.id===ins.id); if(i) toggleInsight({id:i.messageId,content:i.answerText},selBook); }} style={{background:"none",border:"none",cursor:"pointer",color:C.inkF,display:"flex",padding:2,flexShrink:0}} onMouseEnter={e=>e.currentTarget.style.color=C.red} onMouseLeave={e=>e.currentTarget.style.color=C.inkF}>
-                                  <Ico d={D.trash} sz={13} col="currentColor"/>
-                                </button>
-                              </div>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  )}
-                </>
-              );
-            })()}
+            <ConversasInsights
+              chatSessions={chatSessions}
+              insights={insights}
+              selBook={selBook}
+              activeChatId={activeChatId}
+              userName={userName}
+              selectChat={selectChat}
+              deleteChat={deleteChat}
+              newChat={newChat}
+              toggleInsight={toggleInsight}
+              setShowInsightsModal={setShowInsightsModal}
+            />
 
             {showInsightsModal && (
               <InsightsSavedModal
