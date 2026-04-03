@@ -2178,7 +2178,7 @@ function SavedNotesModal({myNotes, otherNotes, profileId, onClose, onEdit, onDel
 
 // ─── Notes Panel (50/50 layout) ───────────────────────
 
-function NotesPanel({dirHandle,bookId,profileId,otherProfiles,synopsis,synopsisStatus,onNotesPresenceChange,onToast}){
+function NotesPanel({dirHandle,bookId,profileId,otherProfiles,synopsis,synopsisStatus,onNotesPresenceChange,onToast,onRegenerateSynopsis}){
   const [myNotes,setMyNotes]=useState([]);
   const [saveState,setSaveState]=useState(null);
   const [ready,setReady]=useState(false);
@@ -2338,8 +2338,21 @@ function NotesPanel({dirHandle,bookId,profileId,otherProfiles,synopsis,synopsisS
 
       {/* ── Lado direito: Sinopse ── */}
       <div style={{flex:1, minWidth:0, display:"flex", flexDirection:"column"}}>
-        <div style={{...lb, marginBottom:8, display:"flex", alignItems:"center", gap:5}}>
-          <Ico d={D.book} sz={11}/> Sinopse
+        <div style={{...lb, marginBottom:8, display:"flex", alignItems:"center", justifyContent:"space-between"}}>
+          <span style={{display:"flex", alignItems:"center", gap:5}}>
+            <Ico d={D.book} sz={11}/> Sinopse
+          </span>
+          {synopsis && synopsisStatus === "done" && onRegenerateSynopsis && (
+            <button
+              onClick={onRegenerateSynopsis}
+              title="Regenerar sinopse"
+              style={{background:"none", border:"none", cursor:"pointer", color:C.inkF, display:"flex", alignItems:"center", gap:3, fontSize:11, padding:0}}
+              onMouseEnter={e=>e.currentTarget.style.color=C.accent}
+              onMouseLeave={e=>e.currentTarget.style.color=C.inkF}
+            >
+              <Ico d={D.arrowUp} sz={11}/> Regenerar
+            </button>
+          )}
         </div>
         <div style={{
           background:C.card, border:`1px solid ${C.border}`, borderRadius:8, padding:"12px 14px",
@@ -3222,16 +3235,18 @@ function Sidebar({
           <div style={{fontSize:19,fontWeight:700,color:C.sbInk,display:"flex",alignItems:"center",gap:8,whiteSpace:"nowrap"}}>
             <Ico d={D.book} sz={17} col={C.sbInk}/> Mynd Library
           </div>
-          <ProfileSwitcher userName={userName} onSwitch={switchProfile} profiles={profiles}/>
-          <button
-            title="Sair / Trocar pasta"
-            onClick={onLogoff}
-            style={{background:"none",border:"1px solid rgba(255,255,255,.18)",borderRadius:6,padding:"5px 7px",cursor:"pointer",color:"rgba(255,255,255,.62)",display:"flex",alignItems:"center",transition:"color .15s, border-color .15s"}}
-            onMouseEnter={e=>{ e.currentTarget.style.color="#fff"; e.currentTarget.style.borderColor="rgba(255,255,255,.5)"; }}
-            onMouseLeave={e=>{ e.currentTarget.style.color="rgba(255,255,255,.62)"; e.currentTarget.style.borderColor="rgba(255,255,255,.18)"; }}
-          >
-            <Ico d={D.logoff} sz={13} col="currentColor"/>
-          </button>
+          <div style={{display:"flex",alignItems:"center",gap:6,flexShrink:0}}>
+            <ProfileSwitcher userName={userName} onSwitch={switchProfile} profiles={profiles}/>
+            <button
+              title="Sair / Trocar pasta"
+              onClick={onLogoff}
+              style={{background:"none",border:"1px solid rgba(255,255,255,.18)",borderRadius:6,padding:"5px 7px",cursor:"pointer",color:"rgba(255,255,255,.62)",display:"flex",alignItems:"center",transition:"color .15s, border-color .15s"}}
+              onMouseEnter={e=>{ e.currentTarget.style.color="#fff"; e.currentTarget.style.borderColor="rgba(255,255,255,.5)"; }}
+              onMouseLeave={e=>{ e.currentTarget.style.color="rgba(255,255,255,.62)"; e.currentTarget.style.borderColor="rgba(255,255,255,.18)"; }}
+            >
+              <Ico d={D.logoff} sz={13} col="currentColor"/>
+            </button>
+          </div>
         </div>
       </div>
 
@@ -4721,7 +4736,9 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
     const entry = conceptsIndex[concept];
     if(!entry){ setConceptDetailLoading(false); return; }
 
-    const relatedBooks = books.filter(b => entry.books.includes(b.id));
+    const relatedBooks = (entry.books || [])
+      .map(id => books.find(b => b.id === id))
+      .filter(Boolean);
 
     // Busca trechos relevantes via embeddings
     let relevantChunks = [];
@@ -5083,11 +5100,8 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
   };
 
   const handleLogoff=async()=>{
-    if(!confirm("Sair e voltar à tela de configuração? Seus dados permanecem na pasta.")) return;
-    try{ await indexedDB.deleteDatabase("mynd_library_v5"); }catch{}
+    if(!confirm("Trocar de perfil? Suas chaves e pasta permanecem salvas.")) return;
     localStorage.removeItem("mynd_user");
-    localStorage.removeItem("mynd_apikey");
-    localStorage.removeItem("mynd_openai_apikey");
     window.location.reload();
   };
 
@@ -5238,40 +5252,26 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
                   {/* Separador antes do modo */}
                   <span style={{fontSize:12,color:C.inkF}}>•</span>
 
-                  {/* Badge de modo — atualiza após decisão */}
-                  {(()=>{
-                    let label, bg, ink, brd;
-                    if(autoDecision){
-                      const sub = autoDecision.mode === "deep" ? "Profundo" : "Básico";
-                      label = `Modo: Automático - ${sub}`;
-                      bg = C.accentBg; ink = C.accent; brd = C.accentBrd;
-                    } else if(chatMode === "auto"){
-                      label = "Modo: Automático";
-                      bg = C.accentBg; ink = C.accent; brd = C.accentBrd;
-                    } else if(chatMode === "deep"){
-                      label = "Modo: Profundo";
-                      bg = C.accentBg; ink = C.accent; brd = C.accentBrd;
-                    } else {
-                      label = "Modo: Básico";
-                      bg = C.accentBg; ink = C.accent; brd = C.accentBrd;
+                  {/* Badge de modo — sempre visível */}
+                  <span style={{fontSize:11,padding:"2px 8px",borderRadius:10,fontWeight:600,background:C.accentBg,color:C.accent,border:`1px solid ${C.accentBrd}`}}>
+                    {autoDecision
+                      ? `Modo: Automático - ${autoDecision.mode === "deep" ? "Profundo" : "Básico"}`
+                      : chatMode === "deep" ? "Modo: Profundo"
+                      : chatMode === "auto" ? "Modo: Automático"
+                      : "Modo: Básico"
                     }
-                    return (
-                      <span style={{fontSize:11,padding:"2px 8px",borderRadius:10,fontWeight:600,background:bg,color:ink,border:`1px solid ${brd}`}}>
-                        {label}
-                      </span>
-                    );
-                  })()}
+                  </span>
 
-                  {/* Badge de índice semântico — pendente ou ativo */}
-                  {selBook && !bookEmbeddings && selBook.embeddingsStatus !== "done" && (
+                  {/* Badge de índice semântico — baseado exclusivamente em embeddingsStatus */}
+                  {selBook.embeddingsStatus === "processing" && (
                     <>
                       <span style={{fontSize:12,color:C.inkF}}>•</span>
                       <span style={{fontSize:11,padding:"2px 8px",borderRadius:10,background:"rgba(122,90,26,.08)",color:C.gold,border:`1px solid ${C.goldBrd}`,fontWeight:600,display:"flex",alignItems:"center",gap:4}}>
-                        {generatingEmbeddings ? "⟳ gerando índice semântico…" : "⟳ índice semântico pendente"}
+                        <span style={{animation:"bob .9s infinite"}}>⟳</span> Preparando busca semântica…
                       </span>
                     </>
                   )}
-                  {selBook && bookEmbeddings && selBook.embeddingsStatus === "done" && (
+                  {selBook.embeddingsStatus === "done" && (
                     <>
                       <span style={{fontSize:12,color:C.inkF}}>•</span>
                       <span style={{fontSize:11,padding:"2px 8px",borderRadius:10,background:"rgba(30,92,46,.1)",color:"#1e5c2e",border:"1px solid rgba(30,92,46,.22)",fontWeight:600,display:"flex",alignItems:"center",gap:4}}>
@@ -5295,6 +5295,7 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
               synopsisStatus={selBook.synopsisStatus}
               onNotesPresenceChange={(hasNotes)=>updateBookNotesPresence(selBook.id,hasNotes)}
               onToast={pushToast}
+              onRegenerateSynopsis={()=>handleRetry("synopsisStatus")}
             />
 
             <ChatHistory
@@ -5477,6 +5478,7 @@ function Root(){
   const [apiKey,setKey]=useState("");
   const [openaiKey,setOpenaiKey]=useState("");
   const [userName,setUser]=useState("");
+  const [savedProfiles,setSavedProfiles]=useState([]);
 
   useEffect(()=>{
     if(!window.showDirectoryPicker){
@@ -5497,15 +5499,25 @@ function Root(){
         const perm=await dh.queryPermission({mode:"readwrite"});
         if(perm==="granted"){
           const k=savedKey || (await rf(dh,"apikey.txt")) || "";
-          // Tenta carregar chave OpenAI do arquivo também (fallback)
           const oaik=savedOpenaiKey || (await rf(dh,"openai_apikey.txt")) || "";
-          if(!k?.trim() || !savedUser){
+          if(!k?.trim()){
             setPhase("setup");
             return;
           }
           setDir(dh);
           setKey(k.trim());
           setOpenaiKey(oaik.trim());
+          if(!savedUser){
+            // Carrega perfis salvos do index para mostrar seleção
+            try{
+              const idxTxt = await rf(dh,"index.json");
+              const idx = idxTxt ? JSON.parse(idxTxt) : {};
+              const profiles = uniqueCaseInsensitive(idx?.profiles || []);
+              setSavedProfiles(profiles);
+            }catch{ setSavedProfiles([]); }
+            setPhase("profile_select");
+            return;
+          }
           setUser(savedUser);
           setPhase("app");
         }else{
@@ -5576,6 +5588,65 @@ function Root(){
           <br/>
           <button onClick={()=>setPhase("setup")} style={{...bG,marginTop:12,fontSize:14}}>
             Fazer setup novamente
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if(phase==="profile_select"){
+    const [draft, setDraft] = React.useState("");
+    const enter = (name) => {
+      const trimmed = (name||"").trim();
+      if(!trimmed) return;
+      localStorage.setItem("mynd_user", trimmed);
+      setUser(trimmed);
+      setPhase("app");
+    };
+    return(
+      <div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",background:C.bg,padding:40}}>
+        <div style={{textAlign:"center",maxWidth:400}}>
+          <div style={{fontSize:28,color:C.ink,marginBottom:6,fontWeight:700}}>Bem-vindo de volta</div>
+          <p style={{fontSize:15,color:C.inkF,lineHeight:1.7,marginBottom:28}}>Escolha um perfil ou entre com um novo nome.</p>
+
+          {savedProfiles.length > 0 && (
+            <div style={{display:"flex",flexDirection:"column",gap:8,marginBottom:24}}>
+              {savedProfiles.map(p=>(
+                <button
+                  key={p}
+                  onClick={()=>enter(p)}
+                  style={{
+                    width:"100%",padding:"12px 18px",borderRadius:8,border:`1px solid ${C.border}`,
+                    background:C.surf,cursor:"pointer",fontSize:15,fontWeight:600,color:C.ink,
+                    display:"flex",alignItems:"center",gap:10,transition:"border-color .15s,box-shadow .15s"
+                  }}
+                  onMouseEnter={e=>{ e.currentTarget.style.borderColor=C.accentBrd; e.currentTarget.style.boxShadow=`0 2px 12px rgba(45,107,228,.1)`; }}
+                  onMouseLeave={e=>{ e.currentTarget.style.borderColor=C.border; e.currentTarget.style.boxShadow="none"; }}
+                >
+                  <span style={{width:32,height:32,borderRadius:"50%",background:C.accent,color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700,fontSize:14,flexShrink:0}}>
+                    {p.charAt(0).toUpperCase()}
+                  </span>
+                  {p}
+                </button>
+              ))}
+            </div>
+          )}
+
+          <div style={{display:"flex",gap:8}}>
+            <input
+              value={draft}
+              onChange={e=>setDraft(e.target.value)}
+              onKeyDown={e=>{ if(e.key==="Enter") enter(draft); }}
+              placeholder="Novo perfil…"
+              style={{flex:1,background:C.surf,border:`1px solid ${C.border}`,borderRadius:7,padding:"10px 12px",color:C.ink,fontSize:14,outline:"none"}}
+            />
+            <button onClick={()=>enter(draft)} disabled={!draft.trim()} style={{...bP(!draft.trim()),padding:"10px 18px"}}>
+              Entrar
+            </button>
+          </div>
+
+          <button onClick={()=>{ setPhase("setup"); }} style={{...bG,marginTop:16,fontSize:13,width:"100%"}}>
+            Trocar pasta ou chaves
           </button>
         </div>
       </div>
