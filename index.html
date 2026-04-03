@@ -3565,9 +3565,15 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
       }
     }
 
-    const nb=books.filter(b=>b.id!==book.id);
-    setBooks(nb);
-    await persist(nb,cats,wishlist,profiles);
+    // Usa functional update para garantir que filtra da lista mais atual (evita closure stale)
+    let nb;
+    setBooks(prev => {
+      nb = prev.filter(b => b.id !== book.id);
+      return nb;
+    });
+    // Pequena pausa para garantir que nb está definido antes do persist
+    await new Promise(r => setTimeout(r, 0));
+    await persist(nb, cats, wishlist, profiles);
 
     setStats(prev=>{
       const nextConsultations={...prev.consultations};
