@@ -104,10 +104,20 @@ const MAX_GLOBAL_CHUNKS_PER_BOOK = 4;
 
 // ─── Auto Mode Constants (calibrar com uso real) ───────
 // Todos os valores são provisórios — observar logs no console para ajustar.
-const AUTO_CONFIDENCE_THRESHOLD = 0.30; // score mínimo para chunk ser considerado forte
-const AUTO_MIN_STRONG_CHUNKS    = 3;    // mínimo de chunks fortes para qualidade "high"
-const AUTO_SCORE_DROP_RATIO     = 0.50; // chunk[1] < chunk[0] * ratio = queda brusca
-const AUTO_MAX_POSITION_SPREAD  = 0.70; // chunks espalhados em mais de 70% do livro
+const AUTO_CONFIDENCE_THRESHOLD = 0.30;
+const AUTO_MIN_STRONG_CHUNKS    = 3;
+const AUTO_SCORE_DROP_RATIO     = 0.50;
+const AUTO_MAX_POSITION_SPREAD  = 0.70;
+
+// ─── Connections Constants ─────────────────────────────
+const CONCEPTS_PER_BOOK_MIN  = 10;
+const CONCEPTS_PER_BOOK_MAX  = 20;
+const CONCEPT_EXTRACT_BLOCKS = 8;   // blocos distribuídos para extração
+const CONCEPT_BLOCK_CHARS    = 3000; // chars por bloco de extração
+const DEEP_SEMANTIC_RATIO    = 0.65; // 65% chunks semânticos no modo profundo
+const DEEP_DISTRIBUTED_RATIO = 0.35; // 35% chunks distribuídos no modo profundo
+const MAX_DEEP_CHUNKS        = 40;   // total máximo de chunks no modo profundo por livro individual
+const MAX_DEEP_CHUNKS_GLOBAL = 12;   // total máximo de chunks por livro no modo profundo global
 
 // ─── Utils ─────────────────────────────────────────────
 
@@ -190,6 +200,7 @@ function normalizeBooks(books){
     synopsis: book?.synopsis ?? null,
     synopsisStatus: book?.synopsisStatus ?? "pending",
     embeddingsStatus: book?.embeddingsStatus ?? "pending",
+    conceptsStatus: book?.conceptsStatus ?? "pending",
     addedAt: book?.addedAt || new Date().toISOString()
   }))
   .filter(b => b.title);
@@ -542,6 +553,188 @@ async function semanticSelectChunks(chunks, embeddings, queryEmbedding, maxChunk
   return scored
     .slice(0, maxChunks)
     .sort((a, b) => a.index - b.index);
+}
+
+// ─── Distributed Deep Mode ────────────────────────────
+
+// Combina chunks semânticos (65%) com chunks distribuídos pelo livro (35%).
+// Garante cobertura de início, meio e fim, reduzindo viés de relevância.
+function buildDistributedChunks(allChunks=[], semanticChunks=[], maxTotal=MAX_DEEP_CHUNKS){
+  if(!allChunks.length) return semanticChunks.slice(0, maxTotal);
+
+  const semanticCount    = Math.round(maxTotal * DEEP_SEMANTIC_RATIO);
+  const distributedCount = maxTotal - semanticCount;
+
+  // Top chunks semânticos
+  const topSemantic = semanticChunks.slice(0, semanticCount);
+  const semanticIds = new Set(topSemantic.map(c => c.index));
+
+  // Chunks distribuídos — amostragem uniforme excluindo os já selecionados
+  const remaining = allChunks.filter(c => !semanticIds.has(c.index));
+  const distributed = [];
+  if(remaining.length > 0){
+    const step = Math.max(1, Math.floor(remaining.length / distributedCount));
+    for(let i = 0; i < remaining.length && distributed.length < distributedCount; i += step){
+      distributed.push(remaining[i]);
+    }
+  }
+
+  // Merge e reordena por posição no livro
+  const merged = [...topSemantic, ...distributed];
+  const seen = new Set();
+  return merged
+    .filter(c => { if(seen.has(c.index)) return false; seen.add(c.index); return true; })
+    .sort((a,b) => a.index - b.index);
+}
+
+// ─── Concepts (Conexões) ──────────────────────────────
+
+const conceptsFileName  = (bookId) => `${bookId}_concepts.json`;
+const conceptsIndexFile = "concepts_index.json";
+
+// Carrega conceitos de um livro (retorna [] se não existir)
+async function loadBookConcepts(dirHandle, bookId){
+  const txt = await rf(dirHandle, conceptsFileName(bookId));
+  if(!txt) return [];
+  try{ return JSON.parse(txt); }catch{ return []; }
+}
+
+// Salva conceitos de um livro
+async function saveBookConcepts(dirHandle, bookId, concepts){
+  await wf(dirHandle, conceptsFileName(bookId), JSON.stringify(concepts));
+}
+
+// Carrega o índice global de conceitos
+async function loadConceptsIndex(dirHandle){
+  const txt = await rf(dirHandle, conceptsIndexFile);
+  if(!txt) return {};
+  try{ return JSON.parse(txt); }catch{ return {}; }
+}
+
+// Salva o índice global de conceitos
+async function saveConceptsIndex(dirHandle, index){
+  await wf(dirHandle, conceptsIndexFile, JSON.stringify(index, null, 2));
+}
+
+// Extrai conceitos de um livro via Claude usando blocos distribuídos
+async function extractConceptsForBook(bookId, bookText, bookTitle, apiKey){
+  const clean = trimStr(bookText);
+  if(!clean) return [];
+
+  // Divide o texto em CONCEPT_EXTRACT_BLOCKS blocos distribuídos
+  const blockSize = Math.max(CONCEPT_BLOCK_CHARS, Math.floor(clean.length / CONCEPT_EXTRACT_BLOCKS));
+  const blocks = [];
+  for(let i = 0; i < CONCEPT_EXTRACT_BLOCKS; i++){
+    const start = Math.floor((i / CONCEPT_EXTRACT_BLOCKS) * clean.length);
+    const end   = Math.min(start + blockSize, clean.length);
+    const block = clean.slice(start, end).trim();
+    if(block) blocks.push(block);
+  }
+
+  const combinedText = blocks.join("\n\n---\n\n").slice(0, 28000); // limite seguro de tokens
+
+  const system = `Você é um assistente especializado em análise de livros. Extraia os conceitos mais importantes do texto fornecido.
+
+REGRAS OBRIGATÓRIAS:
+- Retorne entre ${CONCEPTS_PER_BOOK_MIN} e ${CONCEPTS_PER_BOOK_MAX} conceitos
+- Foque em conceitos relevantes: temas, ideias, mecanismos, frameworks
+- Evite palavras genéricas: "história", "pessoas", "coisas", "mundo"
+- Evite nomes próprios, a menos que representem um conceito claro
+- Evite duplicações e variações do mesmo conceito
+- Prefira conceitos reutilizáveis entre livros
+- Cada conceito deve ter 1 a 3 palavras
+- Use SEMPRE português (PT-BR), mesmo que o texto esteja em outro idioma
+- Use lowercase
+- Evite plural desnecessário
+- Unifique variações: "political propaganda" → "propaganda"
+
+Retorne APENAS um array JSON válido de strings. Exemplo: ["poder", "liderança", "narrativa"]
+Nenhum texto adicional, nenhum markdown.`;
+
+  const response = await callClaude(
+    apiKey,
+    system,
+    [{ role:"user", content:`Livro: "${bookTitle}"\n\nTrechos distribuídos do livro:\n\n${combinedText}` }],
+    600
+  );
+
+  try{
+    const clean2 = response.replace(/```json|```/g,"").trim();
+    const parsed = JSON.parse(clean2);
+    if(!Array.isArray(parsed)) return [];
+    return parsed
+      .map(c => trimStr(c).toLowerCase())
+      .filter(c => c && c.length > 1 && c.length < 50)
+      .slice(0, CONCEPTS_PER_BOOK_MAX);
+  }catch{
+    // Tenta extrair array do texto se vier com lixo ao redor
+    const match = response.match(/\[[\s\S]*\]/);
+    if(match){
+      try{
+        const arr = JSON.parse(match[0]);
+        return Array.isArray(arr) ? arr.map(c=>trimStr(c).toLowerCase()).filter(Boolean) : [];
+      }catch{ return []; }
+    }
+    return [];
+  }
+}
+
+// Reconstrói o índice global a partir dos _concepts.json de todos os livros
+// Preserva sínteses existentes. Marca synthesisStale quando a lista de livros muda.
+async function rebuildConceptsIndex(dirHandle, books, apiKey, existingIndex={}){
+  const newIndex = {};
+
+  for(const book of books){
+    const concepts = await loadBookConcepts(dirHandle, book.id);
+    for(const concept of concepts){
+      if(!newIndex[concept]){
+        newIndex[concept] = {
+          books: [],
+          summary: existingIndex[concept]?.summary || null,
+          synthesis: existingIndex[concept]?.synthesis || null,
+          synthesisUpdatedAt: existingIndex[concept]?.synthesisUpdatedAt || null,
+          synthesisStale: existingIndex[concept]?.synthesisStale ?? true
+        };
+      }
+      if(!newIndex[concept].books.includes(book.id)){
+        newIndex[concept].books.push(book.id);
+      }
+    }
+  }
+
+  // Marca synthesisStale quando a composição de livros mudou (qualquer alteração)
+  for(const [concept, entry] of Object.entries(newIndex)){
+    const prevBooks = existingIndex[concept]?.books || [];
+    const newBooks  = entry.books;
+    const prevSorted = [...prevBooks].sort().join(",");
+    const newSorted  = [...newBooks].sort().join(",");
+    if(prevSorted !== newSorted){
+      newIndex[concept].synthesisStale = true;
+    }
+  }
+
+  // Gera resumo 1 linha para conceitos que não têm ainda
+  const needsSummary = Object.entries(newIndex).filter(([,v]) => !v.summary);
+  if(needsSummary.length > 0 && apiKey){
+    const conceptList = needsSummary.map(([c]) => c).join(", ");
+    try{
+      const resp = await callClaude(
+        apiKey,
+        `Para cada conceito listado, escreva uma frase curta (máx 12 palavras) em português descrevendo o que é. Retorne APENAS JSON válido no formato: {"conceito": "resumo"}. Sem markdown, sem texto extra.`,
+        [{ role:"user", content:conceptList }],
+        800
+      );
+      const clean = resp.replace(/```json|```/g,"").trim();
+      const summaries = JSON.parse(clean);
+      for(const [concept, summary] of Object.entries(summaries)){
+        const key = concept.toLowerCase().trim();
+        if(newIndex[key]) newIndex[key].summary = summary;
+      }
+    }catch{ /* summaries ficam null, gerados lazy */ }
+  }
+
+  await saveConceptsIndex(dirHandle, newIndex);
+  return newIndex;
 }
 
 // ─── Auto Mode Logic ──────────────────────────────────
@@ -2805,6 +2998,7 @@ function Sidebar({
   screen,
   setScreen,
   openGlobal,
+  openConnections,
   searchDraft,
   setSearchDraft,
   tagDraft,
@@ -2868,6 +3062,7 @@ function Sidebar({
         {[
           {id:"home",label:"Página inicial",icon:D.home,fn:()=>setScreen("home")},
           {id:"global",label:"Pesquisar na biblioteca",icon:D.globe,fn:openGlobal},
+          {id:"connections",label:"Conexões",icon:D.link,fn:openConnections},
         ].map(({id,label,icon,fn})=>(
           <button
             key={id}
@@ -3226,6 +3421,210 @@ function Sidebar({
   );
 }
 
+// ─── ConnectionsPage ──────────────────────────────────
+
+function ConnectionsPage({
+  conceptsIndex, conceptsLoading, conceptsProcessing,
+  selConcept, conceptDetail, conceptDetailLoading,
+  books, onOpenConcept, onBack, onUpdate, onReprocessAll
+}){
+  const [search, setSearch] = useState("");
+
+  // Lista ordenada por número de livros, depois alfabética
+  const sortedConcepts = useMemo(()=>{
+    return Object.entries(conceptsIndex)
+      .filter(([c]) => !search.trim() || c.includes(search.toLowerCase().trim()))
+      .sort((a,b) => {
+        const diff = (b[1].books?.length||0) - (a[1].books?.length||0);
+        return diff !== 0 ? diff : a[0].localeCompare(b[0],"pt-BR");
+      });
+  },[conceptsIndex, search]);
+
+  const bookMap = useMemo(()=>{
+    const m={};
+    books.forEach(b=>m[b.id]=b);
+    return m;
+  },[books]);
+
+  // ── Detalhe do conceito ──
+  if(selConcept){
+    const entry = conceptsIndex[selConcept];
+    const relatedBooks = conceptDetail?.relatedBooks || (entry?.books||[]).map(id=>bookMap[id]).filter(Boolean);
+
+    return(
+      <div className="inner-scroll" style={{flex:1,overflowY:"auto",padding:"28px 40px"}}>
+        <button style={{...bG,marginBottom:20,display:"flex",alignItems:"center",gap:6,fontSize:13}} onClick={onBack}>
+          <Ico d={D.back} sz={13}/> Conexões
+        </button>
+
+        <div style={{fontSize:30,fontWeight:700,color:C.ink,marginBottom:6,textTransform:"capitalize"}}>
+          {selConcept}
+        </div>
+        <div style={{display:"flex",gap:8,alignItems:"center",marginBottom:24}}>
+          <span style={{fontSize:13,color:C.inkF}}>{relatedBooks.length} {relatedBooks.length===1?"livro":"livros"}</span>
+          {relatedBooks.map(b=>(
+            <span key={b.id} style={{...tp,fontSize:11}}>{b.title}</span>
+          ))}
+        </div>
+
+        {conceptDetailLoading ? (
+          <div style={{display:"flex",gap:8,alignItems:"center",color:C.inkF,fontSize:14,padding:"20px 0"}}>
+            <span style={{animation:"bob .9s infinite"}}>✦</span> Gerando síntese…
+          </div>
+        ) : conceptDetail ? (
+          <>
+            {/* Síntese persistente — bloco principal */}
+            {conceptDetail.synthesis && (
+              <div style={{background:C.surf,border:`1px solid ${C.border}`,borderRadius:12,padding:"22px 26px",marginBottom:24}}>
+                <div style={{...lb,marginBottom:12,color:C.gold,display:"flex",alignItems:"center",gap:5}}>
+                  <Ico d={D.note} sz={11}/> Síntese da biblioteca
+                </div>
+                <p style={{fontSize:15,color:C.inkD,lineHeight:1.8}}>{conceptDetail.synthesis}</p>
+              </div>
+            )}
+
+            {/* Livros relacionados */}
+            <div style={{marginBottom:24}}>
+              <div style={{...lb,marginBottom:12,display:"flex",alignItems:"center",gap:5}}>
+                <Ico d={D.book} sz={11}/> Livros relacionados
+              </div>
+              <div style={{display:"flex",flexDirection:"column",gap:8}}>
+                {relatedBooks.map(b=>(
+                  <div key={b.id} style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:8,padding:"12px 16px"}}>
+                    <div style={{fontSize:15,fontWeight:600,color:C.ink}}>{b.title}</div>
+                    {b.author && <div style={{fontSize:13,color:C.inkF,marginTop:2}}>{b.author}</div>}
+                    {b.synopsis && <div style={{fontSize:13,color:C.inkD,marginTop:8,lineHeight:1.6}}>{b.synopsis}</div>}
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Conexões entre livros */}
+            {conceptDetail.connections && relatedBooks.length > 1 && (
+              <div style={{marginBottom:24}}>
+                <div style={{...lb,marginBottom:12,display:"flex",alignItems:"center",gap:5}}>
+                  <Ico d={D.link} sz={11}/> Conexões entre livros
+                </div>
+                <div style={{background:C.surf,border:`1px solid ${C.accentBrd}`,borderRadius:10,padding:"16px 20px"}}>
+                  <p style={{fontSize:14,color:C.inkD,lineHeight:1.75,whiteSpace:"pre-wrap"}}>{conceptDetail.connections}</p>
+                </div>
+              </div>
+            )}
+
+            {/* Trechos relevantes */}
+            {conceptDetail.chunks?.length > 0 && (
+              <div>
+                <div style={{...lb,marginBottom:12,display:"flex",alignItems:"center",gap:5}}>
+                  <Ico d={D.search} sz={11}/> Trechos relevantes
+                </div>
+                <div style={{display:"flex",flexDirection:"column",gap:10}}>
+                  {conceptDetail.chunks.map((chunk,i)=>(
+                    <div key={i} style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:8,padding:"12px 16px"}}>
+                      <div style={{...lb,fontSize:10,color:C.accent,marginBottom:6}}>{chunk.bookTitle}</div>
+                      <p style={{fontSize:13,color:C.inkD,lineHeight:1.7}}>{chunk.content}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </>
+        ) : (
+          <p style={{color:C.inkF,fontStyle:"italic"}}>Não foi possível gerar o detalhe deste conceito.</p>
+        )}
+      </div>
+    );
+  }
+
+  // ── Lista de conceitos ──
+  return(
+    <div className="inner-scroll" style={{flex:1,overflowY:"auto",padding:"36px 40px"}}>
+      <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",gap:16,flexWrap:"wrap",marginBottom:24}}>
+        <div>
+          <h1 style={{fontSize:32,fontWeight:700,color:C.ink,lineHeight:1}}>Conexões</h1>
+          <p style={{fontSize:15,color:C.inkF,marginTop:8}}>
+            Conceitos extraídos da sua biblioteca e como se conectam entre livros.
+          </p>
+        </div>
+        <div style={{display:"flex",gap:10,alignItems:"center",flexWrap:"wrap"}}>
+          {conceptsProcessing && (
+            <span style={{fontSize:13,color:C.gold,display:"flex",alignItems:"center",gap:5}}>
+              <span style={{animation:"bob .9s infinite"}}>⟳</span> Processando conceitos…
+            </span>
+          )}
+          <button
+            onClick={onUpdate}
+            disabled={conceptsProcessing}
+            style={{...bP(conceptsProcessing),fontSize:13,padding:"8px 14px",display:"flex",alignItems:"center",gap:6}}
+          >
+            <Ico d={D.check} sz={13} col={conceptsProcessing?"#999":C.surf}/> Atualizar conceitos
+          </button>
+          <button
+            onClick={onReprocessAll}
+            disabled={conceptsProcessing}
+            style={{background:"none",border:"none",cursor:conceptsProcessing?"not-allowed":"pointer",color:C.inkF,fontSize:12,textDecoration:"underline",padding:"4px 0"}}
+          >
+            Reprocessar tudo
+          </button>
+        </div>
+      </div>
+
+      {/* Busca */}
+      <div style={{display:"flex",alignItems:"center",gap:8,background:C.surf,border:`1px solid ${C.border}`,borderRadius:8,padding:"8px 12px",marginBottom:24,maxWidth:400}}>
+        <Ico d={D.search} sz={14} col={C.inkF}/>
+        <input
+          value={search}
+          onChange={e=>setSearch(e.target.value)}
+          placeholder="Filtrar conceitos…"
+          style={{flex:1,background:"none",border:"none",outline:"none",color:C.ink,fontSize:14}}
+        />
+        {search && <button onClick={()=>setSearch("")} style={{background:"none",border:"none",cursor:"pointer",color:C.inkF,display:"flex"}}><Ico d={D.close} sz={12}/></button>}
+      </div>
+
+      {conceptsLoading ? (
+        <div style={{color:C.inkF,fontSize:14,padding:"20px 0"}}>Carregando conceitos…</div>
+      ) : sortedConcepts.length === 0 ? (
+        <div style={{color:C.inkF,fontSize:14,fontStyle:"italic",padding:"20px 0"}}>
+          {Object.keys(conceptsIndex).length === 0
+            ? "Nenhum conceito extraído ainda. Clique em \"Atualizar conceitos\" para começar."
+            : "Nenhum conceito encontrado para este filtro."
+          }
+        </div>
+      ) : (
+        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(240px,1fr))",gap:12}}>
+          {sortedConcepts.map(([concept, entry])=>(
+            <button
+              key={concept}
+              onClick={()=>onOpenConcept(concept)}
+              style={{
+                textAlign:"left",background:C.surf,border:`1px solid ${C.border}`,borderRadius:10,
+                padding:"16px 18px",cursor:"pointer",transition:"border-color .15s,box-shadow .15s"
+              }}
+              onMouseEnter={e=>{
+                e.currentTarget.style.borderColor = C.accentBrd;
+                e.currentTarget.style.boxShadow = `0 4px 16px rgba(45,107,228,.08)`;
+              }}
+              onMouseLeave={e=>{
+                e.currentTarget.style.borderColor = C.border;
+                e.currentTarget.style.boxShadow = "none";
+              }}
+            >
+              <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8}}>
+                <div style={{fontSize:15,fontWeight:700,color:C.ink,textTransform:"capitalize"}}>{concept}</div>
+                <span style={{...tp,fontSize:10,flexShrink:0}}>
+                  {entry.books?.length||0} {(entry.books?.length||0)===1?"livro":"livros"}
+                </span>
+              </div>
+              {entry.summary && (
+                <p style={{fontSize:12,color:C.inkF,lineHeight:1.55,margin:0}}>{entry.summary}</p>
+              )}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── WelcomeBook ─────────────────────────────────────
 
 const BOOK_SUGGESTIONS = [
@@ -3274,11 +3673,18 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
 
   const [globalMsgs,setGlobalMsgs] = useState([]);
   const [globalTexts,setGlobalTexts] = useState(null);
-  const [globalEmbeddings,setGlobalEmbeddings] = useState(null); // { bookId: embeddings[] }
+  const [globalEmbeddings,setGlobalEmbeddings] = useState(null);
   const [globalAutoDecision,setGlobalAutoDecision] = useState(null);
   const [globalSessions,setGlobalSessions] = useState([]);
   const [otherGlobalSessions,setOtherGlobalSessions] = useState({});
   const [activeGlobalChatId,setActiveGlobalChatId] = useState(null);
+
+  const [conceptsIndex,setConceptsIndex] = useState({});      // índice global de conceitos
+  const [conceptsLoading,setConceptsLoading] = useState(false);
+  const [conceptsProcessing,setConceptsProcessing] = useState(false); // processando pendentes
+  const [selConcept,setSelConcept] = useState(null);          // conceito aberto no detalhe
+  const [conceptDetail,setConceptDetail] = useState(null);    // { synthesis, connections, chunks }
+  const [conceptDetailLoading,setConceptDetailLoading] = useState(false);
 
   const [chatLoading,setChatLoading] = useState(false);
   const [globalLoading,setGlobalLoading] = useState(false);
@@ -3342,6 +3748,7 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
           category: validSet.has(fixedCategory) ? fixedCategory : "",
           embeddingsStatus: book.embeddingsStatus ?? "pending",
           synopsisStatus: book.synopsisStatus ?? "pending",
+          conceptsStatus: book.conceptsStatus ?? "pending",
           _hasNotes:hasNotes,
           _hasChats:hasChats
         };
@@ -3558,14 +3965,26 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
         try{
           const chunks = splitTextIntoChunks(text);
           await generateAndSaveEmbeddings(id, chunks, dirHandle, openaiKey, pct=>{
-            setUpProg(65 + Math.round(pct * 0.30));
+            setUpProg(65 + Math.round(pct * 0.22));
           });
           embeddingsStatus = "done";
           book.embeddingsStatus = "done";
         }catch(embErr){
           console.warn("Embeddings não gerados:", embErr.message);
-          // embeddingsStatus permanece "pending" — será tentado ao abrir o livro
         }
+      }
+
+      // ── Extrair conceitos (silencioso, falha não bloqueia) ──
+      let conceptsStatus = "pending";
+      try{
+        const concepts = await extractConceptsForBook(id, text, trimStr(fd.title), apiKey);
+        if(concepts.length > 0){
+          await saveBookConcepts(dirHandle, id, concepts);
+          conceptsStatus = "done";
+          book.conceptsStatus = "done";
+        }
+      }catch(cErr){
+        console.warn("Conceitos não extraídos:", cErr.message);
       }
 
       setUpProg(97);
@@ -3930,6 +4349,214 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
     setGlobalLoading(false);
   };
 
+  const openConnections=async()=>{
+    setScreen("connections");
+    setSelConcept(null);
+    setConceptDetail(null);
+    setConceptsLoading(true);
+
+    // Carrega textos e embeddings globais se ainda não carregados
+    if(!globalTexts){
+      const t={};
+      for(const b of books) t[b.id]=await rf(dirHandle,`${b.id}.txt`) || "";
+      setGlobalTexts(t);
+    }
+    if(!globalEmbeddings){
+      const embMap={};
+      await Promise.all(books.map(async b=>{
+        const embs = await loadEmbeddings(dirHandle, b.id);
+        if(embs) embMap[b.id] = embs;
+      }));
+      setGlobalEmbeddings(embMap);
+    }
+
+    // Carrega índice existente
+    const existing = await loadConceptsIndex(dirHandle);
+
+    // Fix 1: detecta livros pendentes com Promise.all antes de filtrar
+    const hasConceptsMap = {};
+    await Promise.all(books.map(async b=>{
+      const concepts = await loadBookConcepts(dirHandle, b.id);
+      hasConceptsMap[b.id] = concepts.length > 0;
+    }));
+    const pending = books.filter(b =>
+      b.conceptsStatus !== "done" && !hasConceptsMap[b.id]
+    );
+
+    if(pending.length > 0){
+      setConceptsLoading(false);
+      setConceptsProcessing(true);
+      // Exibe o que já existe enquanto processa
+      const partialIndex = await rebuildConceptsIndex(dirHandle, books, apiKey, existing);
+      setConceptsIndex(partialIndex);
+
+      // Fix 2: acumula status em objeto local, aplica tudo de uma vez ao final
+      const updatedStatus = {}; // { bookId: "done" }
+      const currentBooks = [...books];
+
+      for(const book of pending){
+        try{
+          const text = globalTexts?.[book.id] || await rf(dirHandle,`${book.id}.txt`) || "";
+          const concepts = await extractConceptsForBook(book.id, text, book.title, apiKey);
+          if(concepts.length > 0){
+            await saveBookConcepts(dirHandle, book.id, concepts);
+            updatedStatus[book.id] = "done";
+          }
+        }catch(e){
+          console.warn(`Conceitos não extraídos para "${book.title}":`, e.message);
+        }
+      }
+
+      // Aplica todos os status de uma vez
+      if(Object.keys(updatedStatus).length > 0){
+        const nb = currentBooks.map(b =>
+          updatedStatus[b.id] ? {...b, conceptsStatus:"done"} : b
+        );
+        setBooks(nb);
+        await persist(nb, cats, wishlist, profiles);
+      }
+
+      // Reconstrói índice completo com livros atualizados
+      const booksForIndex = books.map(b => updatedStatus[b.id] ? {...b,conceptsStatus:"done"} : b);
+      const fullIndex = await rebuildConceptsIndex(dirHandle, booksForIndex, apiKey, existing);
+      setConceptsIndex(fullIndex);
+      setConceptsProcessing(false);
+    }else{
+      const index = await rebuildConceptsIndex(dirHandle, books, apiKey, existing);
+      setConceptsIndex(index);
+      setConceptsLoading(false);
+    }
+  };
+
+  const updateConceptsAll=async(reprocessAll=false)=>{
+    setConceptsProcessing(true);
+    const existing = await loadConceptsIndex(dirHandle);
+
+    // Fix 1: detecta pendentes com Promise.all
+    const hasConceptsMap = {};
+    await Promise.all(books.map(async b=>{
+      const concepts = await loadBookConcepts(dirHandle, b.id);
+      hasConceptsMap[b.id] = concepts.length > 0;
+    }));
+
+    const toProcess = reprocessAll
+      ? books
+      : books.filter(b => b.conceptsStatus !== "done" || !hasConceptsMap[b.id]);
+
+    // Fix 2: acumula status em objeto local
+    const updatedStatus = {};
+    const currentBooks = [...books];
+
+    for(const book of toProcess){
+      try{
+        const text = globalTexts?.[book.id] || await rf(dirHandle,`${book.id}.txt`) || "";
+        const concepts = await extractConceptsForBook(book.id, text, book.title, apiKey);
+        if(concepts.length > 0){
+          await saveBookConcepts(dirHandle, book.id, concepts);
+          updatedStatus[book.id] = "done";
+        }
+      }catch(e){
+        console.warn(`Conceitos não extraídos para "${book.title}":`, e.message);
+      }
+    }
+
+    // Aplica todos os status de uma vez
+    if(Object.keys(updatedStatus).length > 0){
+      const nb = currentBooks.map(b =>
+        updatedStatus[b.id] ? {...b, conceptsStatus:"done"} : b
+      );
+      setBooks(nb);
+      await persist(nb, cats, wishlist, profiles);
+    }
+
+    const booksForIndex = books.map(b => updatedStatus[b.id] ? {...b,conceptsStatus:"done"} : b);
+    const fullIndex = await rebuildConceptsIndex(dirHandle, booksForIndex, apiKey, existing);
+    setConceptsIndex(fullIndex);
+    setConceptsProcessing(false);
+    pushToast(reprocessAll ? "Conceitos reprocessados" : "Conceitos atualizados");
+  };
+
+  const openConceptDetail=async(concept)=>{
+    setSelConcept(concept);
+    setConceptDetail(null);
+    setConceptDetailLoading(true);
+
+    const entry = conceptsIndex[concept];
+    if(!entry){ setConceptDetailLoading(false); return; }
+
+    const relatedBooks = books.filter(b => entry.books.includes(b.id));
+
+    // Busca trechos relevantes via embeddings
+    let relevantChunks = [];
+    if(globalEmbeddings && openaiKey){
+      try{
+        const qEmb = await generateEmbedding(concept, openaiKey);
+        for(const book of relatedBooks){
+          const embs = globalEmbeddings[book.id];
+          if(!embs) continue;
+          const text = globalTexts?.[book.id] || "";
+          const allCh = splitTextIntoChunks(text);
+          const contentMap = {};
+          for(const c of allCh) contentMap[c.index] = c;
+          const scored = embs
+            .map(e => ({ ...contentMap[e.index], score: cosineSimilarity(qEmb, e.embedding), bookId: book.id, bookTitle: book.title }))
+            .filter(c => c.content)
+            .sort((a,b) => b.score - a.score)
+            .slice(0, 2); // top 2 por livro
+          relevantChunks.push(...scored);
+        }
+        relevantChunks.sort((a,b) => b.score - a.score);
+        relevantChunks = relevantChunks.slice(0, 8);
+      }catch(e){
+        console.warn("Erro ao buscar trechos para conceito:", e.message);
+      }
+    }
+
+    // Gera ou carrega síntese persistente
+    let synthesis = entry.synthesis;
+    let synthesisStale = entry.synthesisStale ?? true;
+
+    if(!synthesis || synthesisStale){
+      try{
+        const bookNames = relatedBooks.map(b=>b.title).join(", ");
+        const excerpts = relevantChunks.slice(0,4).map((c,i)=>`[${c.bookTitle} — Trecho ${i+1}]\n${c.content}`).join("\n\n");
+        synthesis = await callClaude(
+          apiKey,
+          `Você é um assistente literário. Com base nos trechos abaixo, escreva uma síntese em português sobre o conceito "${concept}" — como ele aparece e é tratado nesta biblioteca. Escreva em parágrafos claros, sem bullet points. Máximo 4 parágrafos.`,
+          [{ role:"user", content:`Livros relacionados: ${bookNames}\n\nTrechos:\n${excerpts}` }],
+          600
+        );
+        // Salva síntese no índice
+        const updatedIndex = {
+          ...conceptsIndex,
+          [concept]: { ...entry, synthesis, synthesisStale: false, synthesisUpdatedAt: new Date().toISOString() }
+        };
+        setConceptsIndex(updatedIndex);
+        await saveConceptsIndex(dirHandle, updatedIndex);
+      }catch(e){
+        console.warn("Síntese não gerada:", e.message);
+        synthesis = null;
+      }
+    }
+
+    // Gera conexões entre livros
+    let connections = null;
+    if(relatedBooks.length > 1){
+      try{
+        const bookNames = relatedBooks.map(b=>b.title).join(", ");
+        connections = await callClaude(
+          apiKey,
+          `Você é um assistente literário. Com base nos trechos fornecidos, explique brevemente como o conceito "${concept}" aparece de forma diferente ou complementar em cada livro. Seja direto e conciso. Responda em português.`,
+          [{ role:"user", content:`Livros: ${bookNames}\n\nTrechos:\n${relevantChunks.slice(0,6).map((c,i)=>`[${c.bookTitle}]\n${c.content}`).join("\n\n")}` }],
+          400
+        );
+      }catch{ connections = null; }
+    }
+
+    setConceptDetail({ synthesis, connections, chunks: relevantChunks, relatedBooks });
+    setConceptDetailLoading(false);
+  };
+
   const newGlobalChat=()=>{
     setGlobalMsgs([]);
     setActiveGlobalChatId(null);
@@ -3991,45 +4618,30 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
 
       // ── Modo Profundo ──────────────────────────────────────
       if(effectiveMode === "deep" && bookCanUseDeep){
-        // Prefixo transparente se veio do automático
         const autoNote = decision
           ? `🔍 *Automático: usando visão global — ${decision.reason}*\n\n`
           : "";
 
-        const pdfHandle = await dirHandle.getFileHandle(`${selBook.id}.pdf`);
-        const pdfFile = await pdfHandle.getFile();
-        const pdfBuffer = await pdfFile.arrayBuffer();
-        const pdfBase64 = arrayBufferToBase64(pdfBuffer);
+        // Modo profundo distribuído: 65% semânticos + 35% distribuídos
+        let deepChunks;
+        const allCh = splitTextIntoChunks(bookText);
 
-        const response = await fetch("https://api.anthropic.com/v1/messages",{
-          method:"POST",
-          headers:{
-            "Content-Type":"application/json",
-            "x-api-key":apiKey,
-            "anthropic-version":"2023-06-01",
-            "anthropic-dangerous-direct-browser-access":"true"
-          },
-          body:JSON.stringify({
-            model:"claude-3-5-haiku-20241022",
-            max_tokens:1200,
-            system:`Você é um assistente literário especializado no livro "${selBook.title}". Responda APENAS com base no conteúdo do livro fornecido. Responda em português.`,
-            messages:[
-              ...next.slice(0,-1).map(m=>({ role:m.role, content:m.content })),
-              {
-                role:"user",
-                content:[
-                  { type:"document", source:{ type:"base64", media_type:"application/pdf", data:pdfBase64 } },
-                  { type:"text", text:txt }
-                ]
-              }
-            ]
-          })
-        });
-        if(!response.ok){
-          const e=await response.json().catch(()=>({}));
-          throw new Error(e?.error?.message || `HTTP ${response.status}`);
+        if(bookEmbeddings && openaiKey){
+          const qEmb = decision?.queryEmbedding || await generateEmbedding(txt, openaiKey);
+          const contentMap = {};
+          for(const c of allCh) contentMap[c.index] = c;
+          const scored = bookEmbeddings
+            .map(e => ({ ...contentMap[e.index], score: cosineSimilarity(qEmb, e.embedding) }))
+            .filter(c => c.content)
+            .sort((a,b) => b.score - a.score);
+          deepChunks = buildDistributedChunks(allCh, scored, MAX_DEEP_CHUNKS);
+        }else{
+          // Fallback: distribuído puro sem semântica
+          deepChunks = buildDistributedChunks(allCh, [], MAX_DEEP_CHUNKS);
         }
-        const raw = (await response.json()).content?.[0]?.text || "Sem resposta.";
+
+        const system = buildBookContextPrompt(selBook.title, txt, deepChunks);
+        const raw = await callClaude(apiKey, system, next, 1600);
         r = autoNote + raw;
 
       }else{
@@ -4171,45 +4783,15 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
           ? `🔍 *Automático: usando visão global — ${decision.reason}*\n\n`
           : "";
 
-        const contentBlocks = [];
-        for(const {book} of candidateEntries){
-          const pdfHandle = await dirHandle.getFileHandle(`${book.id}.pdf`).catch(()=>null);
-          if(pdfHandle){
-            const pdfFile = await pdfHandle.getFile();
-            const pdfBuffer = await pdfFile.arrayBuffer();
-            const pdfBase64 = arrayBufferToBase64(pdfBuffer);
-            contentBlocks.push({ type:"text", text:`📖 ${book.title}${book.author ? ` | ${book.author}` : ""}:` });
-            contentBlocks.push({ type:"document", source:{ type:"base64", media_type:"application/pdf", data:pdfBase64 } });
-          }else{
-            const chunkText = candidateEntries.find(e=>e.book.id===book.id)?.chunks.map(c=>c.content).join("\n\n") || "";
-            contentBlocks.push({ type:"text", text:`📖 ${book.title}${book.author ? ` | ${book.author}` : ""}:\n${chunkText}` });
-          }
-        }
-        contentBlocks.push({ type:"text", text:`\nPERGUNTA: ${txt}\n\nResponda em português, indicando sempre de qual livro vem cada informação.` });
-
-        const response = await fetch("https://api.anthropic.com/v1/messages",{
-          method:"POST",
-          headers:{
-            "Content-Type":"application/json",
-            "x-api-key":apiKey,
-            "anthropic-version":"2023-06-01",
-            "anthropic-dangerous-direct-browser-access":"true"
-          },
-          body:JSON.stringify({
-            model:"claude-3-5-haiku-20241022",
-            max_tokens:1200,
-            system:"Você é um assistente com acesso à biblioteca do usuário. Responda APENAS com base nos livros fornecidos. Sempre indique de qual livro vem cada informação. Responda em português.",
-            messages:[
-              ...next.slice(0,-1).map(m=>({ role:m.role, content:m.content })),
-              { role:"user", content:contentBlocks }
-            ]
-          })
+        // Modo profundo distribuído por livro: 65% semânticos + 35% distribuídos
+        const deepEntries = candidateEntries.map(({book, chunks: semanticChunks}) => {
+          const allCh = splitTextIntoChunks(globalTexts[book.id] || "");
+          const deepChunks = buildDistributedChunks(allCh, semanticChunks, MAX_DEEP_CHUNKS_GLOBAL);
+          return { book, chunks: deepChunks };
         });
-        if(!response.ok){
-          const e=await response.json().catch(()=>({}));
-          throw new Error(e?.error?.message || `HTTP ${response.status}`);
-        }
-        const raw = (await response.json()).content?.[0]?.text || "Sem resposta.";
+
+        const system = buildGlobalContextPrompt(txt, deepEntries);
+        const raw = await callClaude(apiKey, system, next, 1600);
         r = autoNote + raw;
 
       }else{
@@ -4299,6 +4881,7 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
         screen={screen}
         setScreen={setScreen}
         openGlobal={openGlobal}
+        openConnections={openConnections}
         searchDraft={searchDraft}
         setSearchDraft={setSearchDraft}
         tagDraft={tagDraft}
@@ -4511,6 +5094,24 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
               mode={globalChatMode}
               setMode={setGlobalChatMode}
               deepDisabled={false}
+            />
+          </div>
+        )}
+
+        {screen==="connections" && (
+          <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}}>
+            <ConnectionsPage
+              conceptsIndex={conceptsIndex}
+              conceptsLoading={conceptsLoading}
+              conceptsProcessing={conceptsProcessing}
+              selConcept={selConcept}
+              conceptDetail={conceptDetail}
+              conceptDetailLoading={conceptDetailLoading}
+              books={books}
+              onOpenConcept={openConceptDetail}
+              onBack={()=>{ setSelConcept(null); setConceptDetail(null); }}
+              onUpdate={()=>updateConceptsAll(false)}
+              onReprocessAll={()=>updateConceptsAll(true)}
             />
           </div>
         )}
