@@ -1982,7 +1982,7 @@ function NotesPanel({dirHandle,bookId,profileId,otherProfiles,synopsis,synopsisS
 
 const MODE_TOOLTIPS = {
   auto:  "Escolhe automaticamente o melhor modo para cada pergunta. Pode usar trechos ou o livro inteiro.",
-  basic: "Busca semântica com embeddings. Seleciona os trechos mais relevantes do livro.",
+  basic: "Busca pelos trechos mais relevantes do livro. Mais rápido e econômico.",
   deep:  "Envia o livro completo para o Claude. Respostas mais precisas e abrangentes."
 };
 
@@ -4171,18 +4171,16 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
                     if(autoDecision){
                       const sub = autoDecision.mode === "deep" ? "Profundo" : "Básico";
                       label = `Modo: Automático - ${sub}`;
-                      bg = autoDecision.mode === "deep" ? "rgba(32,110,171,.1)" : "rgba(30,92,46,.1)";
-                      ink = autoDecision.mode === "deep" ? "#206eab" : "#1e5c2e";
-                      brd = autoDecision.mode === "deep" ? "rgba(32,110,171,.22)" : "rgba(30,92,46,.22)";
+                      bg = C.accentBg; ink = C.accent; brd = C.accentBrd;
                     } else if(chatMode === "auto"){
                       label = "Modo: Automático";
-                      bg = "rgba(30,92,46,.1)"; ink = "#1e5c2e"; brd = "rgba(30,92,46,.22)";
+                      bg = C.accentBg; ink = C.accent; brd = C.accentBrd;
                     } else if(chatMode === "deep"){
                       label = "Modo: Profundo";
-                      bg = "rgba(32,110,171,.1)"; ink = "#206eab"; brd = "rgba(32,110,171,.22)";
+                      bg = C.accentBg; ink = C.accent; brd = C.accentBrd;
                     } else {
                       label = "Modo: Básico";
-                      bg = "rgba(45,107,228,.08)"; ink = C.accent; brd = C.accentBrd;
+                      bg = C.accentBg; ink = C.accent; brd = C.accentBrd;
                     }
                     return (
                       <span style={{fontSize:11,padding:"2px 8px",borderRadius:10,fontWeight:600,background:bg,color:ink,border:`1px solid ${brd}`}}>
