@@ -1,5 +1,6 @@
 
 
+
 <!DOCTYPE html>
 <html lang="pt-BR">
 <head>
@@ -233,6 +234,34 @@ function normalizeWishlist(wishlist){
 function truncateText(str="", max=70){
   if(str.length <= max) return str;
   return str.slice(0,max-1).trim() + "…";
+}
+
+function sanitizeSynopsisText(text=""){
+  return text
+    .replace(/^#+\s*/gm, "")
+    .replace(/\*\*(.+?)\*\*/g, "$1")
+    .replace(/\*(.+?)\*/g, "$1")
+    .replace(/`(.+?)`/g, "$1")
+    .replace(/\s+/g, " ")
+    .replace(/\s+,/g, ",")
+    .trim();
+}
+
+function sanitizeSynthesisText(text=""){
+  return sanitizeSynopsisText(text);
+}
+
+function renderSynopsis(text=""){
+  const comma = text.indexOf(",");
+  if(comma === -1 || comma > 120) return <span>{text}</span>;
+  const title = text.slice(0, comma).trim();
+  const rest  = text.slice(comma);
+  return (
+    <>
+      <strong>{title}</strong>
+      <span>{rest}</span>
+    </>
+  );
 }
 
 function joinTags(tags=[]){
@@ -1305,7 +1334,7 @@ async function fetchBookSynopsis(apiKey, title, author){
   const query = author ? `${title} — ${author}` : title;
   const r = await callClaude(
     apiKey,
-    `Você é um assistente literário. Baseado no seu conhecimento geral, escreva uma sinopse concisa do livro em português (4 a 6 frases): do que trata, contexto, para quem é indicado e por que vale a pena ler. Seja direto. Não use markdown, não use títulos, não use negrito. Texto corrido.`,
+    `Você é um assistente literário. Baseado no seu conhecimento geral, escreva uma sinopse concisa do livro em português (4 a 6 frases): do que trata, contexto, para quem é indicado e por que vale a pena ler. Comece OBRIGATORIAMENTE com o formato: "{Título}, de {Autor}, ..." — por exemplo: "War, de Bob Woodward, é um livro que...". Seja direto. Não use markdown, não use títulos, não use negrito, não use #, não use * ou **. Texto corrido simples. Não repita o título em formato diferente ao longo do texto.`,
     [{ role:"user", content:`Livro: ${query}` }],
     400
   );
@@ -2317,7 +2346,7 @@ function NotesPanel({dirHandle,bookId,profileId,otherProfiles,synopsis,synopsisS
           flex:1
         }}>
           {synopsis ? (
-            <p style={{fontSize:13.5, color:C.inkD, lineHeight:1.75}}>{synopsis}</p>
+            <p style={{fontSize:13.5, color:C.inkD, lineHeight:1.75}}>{renderSynopsis(synopsis)}</p>
           ) : synopsisStatus === "pending" || synopsisStatus === "processing" ? (
             <p style={{fontSize:13, color:C.inkF, fontStyle:"italic", lineHeight:1.6}}>
               {synopsisStatus === "processing" ? "Gerando sinopse…" : "Sinopse ainda não gerada."}
@@ -3633,7 +3662,7 @@ function ConnectionsPage({
                 <div style={{...lb,marginBottom:12,color:C.gold,display:"flex",alignItems:"center",gap:5}}>
                   <Ico d={D.note} sz={11}/> Síntese da biblioteca
                 </div>
-                <p style={{fontSize:15,color:C.inkD,lineHeight:1.8}}>{conceptDetail.synthesis}</p>
+                <p style={{fontSize:15,color:C.inkD,lineHeight:1.8}}>{sanitizeSynthesisText(conceptDetail.synthesis)}</p>
               </div>
             )}
 
@@ -3647,7 +3676,6 @@ function ConnectionsPage({
                   <div key={b.id} style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:8,padding:"12px 16px"}}>
                     <div style={{fontSize:15,fontWeight:600,color:C.ink}}>{b.title}</div>
                     {b.author && <div style={{fontSize:13,color:C.inkF,marginTop:2}}>{b.author}</div>}
-                    {b.synopsis && <div style={{fontSize:13,color:C.inkD,marginTop:8,lineHeight:1.6}}>{b.synopsis}</div>}
                   </div>
                 ))}
               </div>
@@ -4126,7 +4154,7 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
         // Sinopse
         setBooks(prev=>prev.map(b=>b.id===bookId?{...b,synopsisStatus:"processing"}:b));
         try{
-          const synopsis = await fetchBookSynopsis(apiKey, bookTitle, bookAuthor);
+          const synopsis = sanitizeSynopsisText(await fetchBookSynopsis(apiKey, bookTitle, bookAuthor));
           setBooks(prev=>{
             const nb2=prev.map(b=>b.id===bookId?{...b,synopsis,synopsisStatus:"done"}:b);
             persist(nb2,nextCats,wishlist,profiles);
@@ -4406,7 +4434,8 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
       setBooks(prev=>prev.map(b=>b.id===fid?{...b,synopsisStatus:"processing"}:b));
       setSelBook(p=>p?{...p,synopsisStatus:"processing"}:p);
       fetchBookSynopsis(apiKey, freshBook.title, freshBook.author)
-        .then(async synopsis => {
+        .then(async raw => {
+          const synopsis = sanitizeSynopsisText(raw);
           setBooks(prev=>{
             const nb=prev.map(b=>b.id===fid?{...b,synopsis,synopsisStatus:"done"}:b);
             persist(nb,cats,wishlist,profiles);
@@ -4728,12 +4757,12 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
       try{
         const bookNames = relatedBooks.map(b=>b.title).join(", ");
         const excerpts = relevantChunks.slice(0,4).map((c,i)=>`[${c.bookTitle} — Trecho ${i+1}]\n${c.content}`).join("\n\n");
-        synthesis = await callClaude(
+        synthesis = sanitizeSynthesisText(await callClaude(
           apiKey,
-          `Você é um assistente literário. Escreva um parágrafo direto de no máximo 100 palavras sobre como o conceito "${concept}" aparece nesta biblioteca. Sem títulos, sem markdown, sem bullet points, sem negrito. Tom direto e fluido. Texto corrido.`,
+          `Você é um assistente literário. Escreva um parágrafo direto de no máximo 100 palavras sobre como o conceito "${concept}" aparece nesta biblioteca. Comece diretamente pela ideia principal, sem repetir o nome do conceito como título ou heading. Sem títulos, sem markdown, sem bullet points, sem negrito, sem #, sem *. Texto corrido simples.`,
           [{ role:"user", content:`Livros relacionados: ${bookNames}\n\nTrechos:\n${excerpts}` }],
           300
-        );
+        ));
         // Salva síntese no índice
         const updatedIndex = {
           ...conceptsIndex,
@@ -5076,7 +5105,7 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
 
     if(statusKey==="synopsisStatus"){
       try{
-        const synopsis = await fetchBookSynopsis(apiKey, book.title, book.author);
+        const synopsis = sanitizeSynopsisText(await fetchBookSynopsis(apiKey, book.title, book.author));
         setBooks(prev=>{ const nb=prev.map(b=>b.id===book.id?{...b,synopsis,synopsisStatus:"done"}:b); persist(nb,cats,wishlist,profiles); return nb; });
         setSelBook(p=>p?{...p,synopsis,synopsisStatus:"done"}:p);
       }catch(e){
