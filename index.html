@@ -2401,9 +2401,9 @@ function NotesPanel({dirHandle,bookId,profileId,otherProfiles,synopsis,synopsisS
 // ─── ChatArea ──────────────────────────────────────────
 
 const MODE_TOOLTIPS = {
-  auto:  "Escolhe automaticamente o melhor modo para cada pergunta. Pode usar trechos ou o livro inteiro.",
+  auto:  "Escolhe o melhor modo para cada pergunta automaticamente.",
   basic: "Busca pelos trechos mais relevantes do livro. Mais rápido e econômico.",
-  deep:  "Envia o livro completo para o Claude. Respostas mais precisas e abrangentes."
+  deep:  "Visão ampla do livro. Ideal para resumos e temas gerais."
 };
 
 function ModeToggle({mode, setMode, deepDisabled}){
