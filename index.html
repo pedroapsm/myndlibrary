@@ -2540,15 +2540,36 @@ function ModeToggle({mode, setMode, deepDisabled}){
   );
 }
 
-function ChatArea({messages,loading,onSend,placeholder,emptyNode,onExport,mode,setMode,deepDisabled,onToggleInsight,savedMessageIds=new Set()}){
+function ChatArea({messages,loading,onSend,placeholder,emptyNode,onExport,mode,setMode,deepDisabled,onToggleInsight,savedMessageIds=new Set(),apiKey=""}){
   const [input,setInput]=useState("");
   const [pendingInsightMsg,setPendingInsightMsg]=useState(null);
   const endRef=useRef();
+  const lastAssistantRef=useRef();
   const inputRef=useRef();
+  const prevMsgCountRef=useRef(0);
 
   useEffect(()=>{
-    endRef.current?.scrollIntoView({behavior:"smooth"});
-  },[messages,loading]);
+    const msgs = messages;
+    const prev = prevMsgCountRef.current;
+    prevMsgCountRef.current = msgs.length;
+
+    if(msgs.length === 0) return;
+
+    // Nova mensagem adicionada
+    if(msgs.length > prev){
+      const last = msgs[msgs.length - 1];
+      if(last.role === "assistant" && lastAssistantRef.current){
+        // Scroll para o início da resposta do assistente
+        lastAssistantRef.current.scrollIntoView({ block:"start", behavior:"smooth" });
+      } else {
+        endRef.current?.scrollIntoView({ behavior:"smooth" });
+      }
+    }
+  },[messages]);
+
+  useEffect(()=>{
+    if(loading) endRef.current?.scrollIntoView({ behavior:"smooth" });
+  },[loading]);
 
   useEffect(()=>{
     setInput("");
@@ -2577,9 +2598,12 @@ function ChatArea({messages,loading,onSend,placeholder,emptyNode,onExport,mode,s
       >
         {messages.length===0 && emptyNode}
 
-        {messages.map((m,i)=>(
+        {messages.map((m,i)=>{
+          const isLastAssistant = m.role==="assistant" && i===messages.map(x=>x.role).lastIndexOf("assistant");
+          return(
           <div
             key={i}
+            ref={isLastAssistant ? lastAssistantRef : null}
             style={{
               display:"flex",
               gap:10,
@@ -2642,7 +2666,8 @@ function ChatArea({messages,loading,onSend,placeholder,emptyNode,onExport,mode,s
               </div>
             </div>
           </div>
-        ))}
+        );
+        })}
 
         {loading && (
           <div style={{display:"flex",gap:10,alignSelf:"flex-start"}}>
@@ -2704,6 +2729,8 @@ function ChatArea({messages,loading,onSend,placeholder,emptyNode,onExport,mode,s
 
       {pendingInsightMsg && (
         <SaveInsightModal
+          msg={pendingInsightMsg}
+          apiKey={apiKey}
           onSave={(name)=>{
             onToggleInsight(pendingInsightMsg, name);
             setPendingInsightMsg(null);
@@ -2717,11 +2744,34 @@ function ChatArea({messages,loading,onSend,placeholder,emptyNode,onExport,mode,s
 
 // ─── SaveInsightModal ─────────────────────────────────
 
-function SaveInsightModal({ onSave, onClose }){
+function SaveInsightModal({ onSave, onClose, msg, apiKey }){
   const [name, setName] = useState("");
+  const [generating, setGenerating] = useState(true);
   const inputRef = useRef();
 
-  useEffect(()=>{ setTimeout(()=>inputRef.current?.focus(), 50); },[]);
+  useEffect(()=>{
+    let cancelled = false;
+    const generate = async()=>{
+      if(!apiKey || !msg?.content) { setGenerating(false); setTimeout(()=>inputRef.current?.focus(),50); return; }
+      try{
+        const title = await callClaude(
+          apiKey,
+          `Gere um título curto e descritivo (máx 6 palavras) para este insight em português. Retorne APENAS o título, sem aspas, sem pontuação no final.`,
+          [{ role:"user", content: msg.content.slice(0, 500) }],
+          30
+        );
+        if(!cancelled){
+          setName(title.trim());
+          setGenerating(false);
+          setTimeout(()=>{ if(inputRef.current){ inputRef.current.focus(); inputRef.current.select(); }},50);
+        }
+      }catch{
+        if(!cancelled){ setGenerating(false); setTimeout(()=>inputRef.current?.focus(),50); }
+      }
+    };
+    generate();
+    return ()=>{ cancelled=true; };
+  },[]);
 
   return(
     <div style={ov} onClick={e=>{ if(e.target===e.currentTarget) onClose(); }}>
@@ -2732,15 +2782,16 @@ function SaveInsightModal({ onSave, onClose }){
         <div style={{...lb, marginBottom:6}}>Nome do insight</div>
         <input
           ref={inputRef}
-          value={name}
+          value={generating ? "" : name}
           onChange={e=>setName(e.target.value)}
-          onKeyDown={e=>{ if(e.key==="Enter" && name.trim()) onSave(name.trim()); }}
-          placeholder="Ex: Putin e a desconfiança dos EUA"
-          style={{...fi, marginBottom:18}}
+          onKeyDown={e=>{ if(e.key==="Enter" && name.trim() && !generating) onSave(name.trim()); }}
+          placeholder={generating ? "Gerando sugestão…" : "Nome do insight"}
+          disabled={generating}
+          style={{...fi, marginBottom:18, opacity: generating ? 0.6 : 1}}
         />
         <div style={{display:"flex", gap:10, justifyContent:"flex-end"}}>
           <button style={bG} onClick={onClose}>Cancelar</button>
-          <button style={bP(!name.trim())} disabled={!name.trim()} onClick={()=>onSave(name.trim())}>
+          <button style={bP(!name.trim()||generating)} disabled={!name.trim()||generating} onClick={()=>onSave(name.trim())}>
             Salvar
           </button>
         </div>
@@ -5817,16 +5868,84 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
               onRegenerateSynopsis={()=>handleRetry("synopsisStatus")}
             />
 
-            <div style={{padding:"10px 28px 8px", display:"flex", gap:16, alignItems:"stretch"}}>
-              <BookInsights
-                bookId={selBook.id}
-                insights={insights}
-                onRemove={(insightId)=>{
-                  const ins = insights.find(i=>i.id===insightId);
-                  if(ins) toggleInsight({id:ins.messageId, content:ins.answerText}, selBook);
-                }}
-                onShowModal={()=>setShowInsightsModal(true)}
-              />
+            <div style={{padding:"8px 28px 0", borderTop:`1px solid ${C.border}`, display:"flex", gap:16, alignItems:"stretch"}}>
+              {/* ── Conversas anteriores ── */}
+              <div style={{width:"calc(50% - 8px)", minWidth:0, display:"flex", flexDirection:"column"}}>
+                <div style={{...lb, marginBottom:8, display:"flex", alignItems:"center", justifyContent:"space-between"}}>
+                  <span style={{display:"flex", alignItems:"center", gap:5}}>
+                    <Ico d={D.chat} sz={11}/> Conversas anteriores
+                  </span>
+                  <button onClick={newChat} style={{background:"none",border:"none",cursor:"pointer",color:C.accent,fontSize:12,display:"flex",alignItems:"center",gap:4,fontWeight:600}}>
+                    <Ico d={D.plus} sz={11}/> Nova
+                  </button>
+                </div>
+                {(chatSessions.length > 0 || Object.keys(otherSessions).length > 0) ? (
+                  <div className="inner-scroll" style={{display:"flex",flexDirection:"column",gap:1,maxHeight:140,overflowY:"auto"}}>
+                    {chatSessions.map(s=>{
+                      const isActive = s.id===activeChatId;
+                      return(
+                        <div key={s.id} style={{position:"relative",display:"flex",alignItems:"center"}}
+                          onMouseEnter={e=>e.currentTarget.setAttribute("data-hov","1")}
+                          onMouseLeave={e=>e.currentTarget.removeAttribute("data-hov")}
+                        >
+                          <button onClick={()=>selectChat(s)} style={{flex:1,textAlign:"left",padding:"7px 10px",paddingRight:28,borderRadius:6,border:`1px solid ${isActive?C.accentBrd:"transparent"}`,background:isActive?C.accentBg:"none",cursor:"pointer",width:"100%",transition:"background .12s"}}
+                            onMouseEnter={e=>{ if(!isActive){ e.currentTarget.style.background=C.card; e.currentTarget.style.borderColor=C.border; }}}
+                            onMouseLeave={e=>{ if(!isActive){ e.currentTarget.style.background="none"; e.currentTarget.style.borderColor="transparent"; }}}
+                          >
+                            <div style={{display:"flex",alignItems:"center",gap:6,minWidth:0}}>
+                              <Ico d={D.chat} sz={11} col={isActive?C.accent:C.inkF}/>
+                              <span style={{flex:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",fontSize:13,color:isActive?C.accent:C.inkD,fontWeight:isActive?600:400}}>{s.title||"Sem título"}</span>
+                            </div>
+                            <div style={{fontSize:10,color:C.inkF,marginTop:2,paddingLeft:17}}>{s.date}</div>
+                          </button>
+                          <button onClick={()=>deleteChat(s.id)} style={{position:"absolute",right:4,background:"none",border:"none",cursor:"pointer",color:C.inkF,display:"flex",alignItems:"center",padding:4,borderRadius:4}} onMouseEnter={e=>e.currentTarget.style.color=C.red} onMouseLeave={e=>e.currentTarget.style.color=C.inkF} title="Excluir">
+                            <Ico d={D.trash} sz={14} col="currentColor"/>
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <p style={{fontSize:13,color:C.inkF,fontStyle:"italic"}}>Nenhuma conversa ainda.</p>
+                )}
+              </div>
+
+              {/* ── Insights deste livro ── */}
+              {(()=>{
+                const bookInsights = insights.filter(ins=>ins.bookId===selBook.id);
+                if(bookInsights.length===0) return (
+                  <div style={{width:"calc(50% - 8px)", minWidth:0, display:"flex", flexDirection:"column"}}>
+                    <div style={{...lb, marginBottom:8, display:"flex", alignItems:"center", gap:5}}>
+                      <span style={{color:"#e05c7a"}}>♥</span> Insights
+                    </div>
+                    <p style={{fontSize:13,color:C.inkF,fontStyle:"italic"}}>Nenhum insight salvo ainda.</p>
+                  </div>
+                );
+                return(
+                  <div style={{width:"calc(50% - 8px)", minWidth:0, display:"flex", flexDirection:"column"}}>
+                    <div style={{...lb, marginBottom:8, display:"flex", alignItems:"center", justifyContent:"space-between"}}>
+                      <span style={{display:"flex", alignItems:"center", gap:5}}>
+                        <span style={{color:"#e05c7a"}}>♥</span> Insights
+                      </span>
+                      <button
+                        onClick={()=>setShowInsightsModal(true)}
+                        style={{...bI, padding:"2px 8px", display:"flex", alignItems:"center", gap:4, fontSize:11}}
+                      >
+                        <span style={{color:"#e05c7a", fontSize:11}}>♥</span> Insights salvos {bookInsights.length > 0 && `(${bookInsights.length})`}
+                      </button>
+                    </div>
+                    <div className="inner-scroll" style={{display:"flex",flexDirection:"column",gap:1,maxHeight:140,overflowY:"auto"}}>
+                      {bookInsights.map(ins=>(
+                        <div key={ins.id} style={{display:"flex",alignItems:"baseline",gap:10,padding:"5px 2px",borderBottom:`1px solid ${C.borderL}`}}>
+                          <span style={{flex:1,fontSize:13,fontWeight:600,color:C.inkD,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",minWidth:0}}>{ins.insightName||"Sem nome"}</span>
+                          <span style={{fontSize:11,color:C.inkF,flexShrink:0,whiteSpace:"nowrap"}}>{ins.profileId}</span>
+                          <span style={{fontSize:11,color:C.inkF,flexShrink:0,whiteSpace:"nowrap"}}>{new Date(ins.savedAt).toLocaleDateString("pt-BR")}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })()}
             </div>
 
             {showInsightsModal && (
@@ -5841,18 +5960,7 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
               />
             )}
 
-            <ChatHistory
-              sessions={chatSessions}
-              otherSessions={otherSessions}
-              activeId={activeChatId}
-              onSelect={selectChat}
-              onNew={newChat}
-              onDelete={deleteChat}
-              otherProfileNames={otherProfiles}
-              title="Conversas anteriores"
-            />
-
-            <div style={{padding:"6px 28px 0",borderBottom:`1px solid ${C.border}`,borderTop:chatSessions.length || Object.keys(otherSessions).length ? `1px solid ${C.border}` : "none"}}>
+            <div style={{padding:"6px 28px 0",borderBottom:`1px solid ${C.border}`,borderTop:`1px solid ${C.border}`}}>
               <div style={{...lb,paddingBottom:7,display:"flex",alignItems:"center",gap:6}}>
                 <Ico d={D.chat} sz={11}/> Conversa
               </div>
@@ -5870,6 +5978,7 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
               deepDisabled={!bookCanUseDeep}
               onToggleInsight={selBook ? (msg, name)=>toggleInsight(msg, selBook, name) : null}
               savedMessageIds={new Set(insights.filter(ins=>ins.bookId===selBook?.id).map(ins=>ins.messageId))}
+              apiKey={apiKey}
             />
           </div>
         )}
