@@ -1830,10 +1830,10 @@ function NotesPanel({dirHandle,bookId,profileId,otherProfiles,synopsis,synopsisS
   const isOwn = viewMode === profileId;
 
   return(
-    <div style={{padding:"10px 28px 0", display:"flex", gap:16}}>
+    <div style={{padding:"10px 28px 0", display:"flex", gap:16, alignItems:"stretch"}}>
 
       {/* ── Lado esquerdo: Notas ── */}
-      <div style={{flex:1, minWidth:0}}>
+      <div style={{flex:1, minWidth:0, display:"flex", flexDirection:"column"}}>
         {/* Header */}
         <div style={{display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:8, gap:8, flexWrap:"wrap"}}>
           <div style={{display:"flex", alignItems:"center", gap:6}}>
@@ -1878,12 +1878,12 @@ function NotesPanel({dirHandle,bookId,profileId,otherProfiles,synopsis,synopsisS
 
         {/* Editor (só para próprias notas) */}
         {isOwn && (
-          <div style={{background:C.surf, border:`1px solid ${C.border}`, borderRadius:8, padding:"8px 10px", marginBottom:0}}>
+          <div style={{background:C.surf, border:`1px solid ${C.border}`, borderRadius:8, padding:"8px 10px", flex:1, display:"flex", flexDirection:"column"}}>
             <textarea
               value={draft}
               onChange={e=>setDraft(e.target.value)}
               placeholder="Escreva uma nota"
-              style={{...fi, resize:"vertical", minHeight:58, lineHeight:1.6, fontSize:13, border:"none", background:"transparent", padding:0}}
+              style={{...fi, resize:"none", flex:1, minHeight:58, lineHeight:1.6, fontSize:13, border:"none", background:"transparent", padding:0}}
             />
             <div style={{display:"flex", justifyContent:"flex-end", gap:7, marginTop:6}}>
               {editingId && <button onClick={()=>{setEditingId(null); setDraft("");}} style={bG}>Cancelar</button>}
@@ -1897,13 +1897,13 @@ function NotesPanel({dirHandle,bookId,profileId,otherProfiles,synopsis,synopsisS
       </div>
 
       {/* ── Lado direito: Sinopse ── */}
-      <div style={{flex:1, minWidth:0}}>
+      <div style={{flex:1, minWidth:0, display:"flex", flexDirection:"column"}}>
         <div style={{...lb, marginBottom:8, display:"flex", alignItems:"center", gap:5}}>
           <Ico d={D.book} sz={11}/> Sinopse
         </div>
         <div style={{
           background:C.card, border:`1px solid ${C.border}`, borderRadius:8, padding:"12px 14px",
-          minHeight:110, height:"100%", boxSizing:"border-box"
+          flex:1
         }}>
           {synopsis ? (
             <p style={{fontSize:13.5, color:C.inkD, lineHeight:1.75}}>{synopsis}</p>
