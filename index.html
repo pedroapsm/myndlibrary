@@ -756,21 +756,28 @@ async function rebuildConceptsIndex(dirHandle, books, apiKey, existingIndex={}){
   // Gera resumo 1 linha para todos os conceitos sem summary (novos ou existentes sem definição)
   const needsSummary = Object.entries(newIndex).filter(([c, v]) => !v.summary);
   if(needsSummary.length > 0 && apiKey){
-    const conceptList = needsSummary.map(([c]) => c).join(", ");
-    try{
-      const resp = await callClaude(
-        apiKey,
-        `Para cada conceito listado, escreva uma frase curta (máx 12 palavras) em português descrevendo o que é. Retorne APENAS JSON válido no formato: {"conceito": "resumo"}. Sem markdown, sem texto extra.`,
-        [{ role:"user", content:conceptList }],
-        800
-      );
-      const clean = resp.replace(/```json|```/g,"").trim();
-      const summaries = JSON.parse(clean);
-      for(const [concept, summary] of Object.entries(summaries)){
-        const key = concept.toLowerCase().trim();
-        if(newIndex[key]) newIndex[key].summary = summary;
+    // Processa em lotes de 20 para evitar resposta muito longa do modelo
+    const BATCH = 20;
+    for(let i = 0; i < needsSummary.length; i += BATCH){
+      const batch = needsSummary.slice(i, i + BATCH);
+      const conceptList = batch.map(([c]) => c).join(", ");
+      try{
+        const resp = await callClaude(
+          apiKey,
+          `Para cada conceito listado, escreva uma frase curta (máx 12 palavras) em português descrevendo o que é. Retorne APENAS JSON válido no formato: {"conceito": "resumo"}. Sem markdown, sem texto extra, sem comentários.`,
+          [{ role:"user", content:conceptList }],
+          800
+        );
+        const clean = resp.replace(/```json|```/g,"").trim();
+        const summaries = JSON.parse(clean);
+        for(const [concept, summary] of Object.entries(summaries)){
+          const key = concept.toLowerCase().trim();
+          if(newIndex[key]) newIndex[key].summary = summary;
+        }
+      }catch(e){
+        console.warn("Summaries batch falhou:", e.message);
       }
-    }catch{ /* summaries ficam null, gerados lazy */ }
+    }
   }
 
   await saveConceptsIndex(dirHandle, newIndex);
@@ -4662,7 +4669,7 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
         await persist(nb, cats, wishlist, profiles);
       }
 
-      const booksForIndex = books.map(b => updatedStatus[b.id] ? {...b,conceptsStatus:"done"} : b);
+      const booksForIndex = currentBooks.map(b => updatedStatus[b.id] ? {...b,conceptsStatus:"done"} : b);
       const fullIndex = await rebuildConceptsIndex(dirHandle, booksForIndex, apiKey, existing);
       setConceptsIndex(fullIndex);
       setConceptsProcessing(false);
@@ -4716,7 +4723,10 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
       await persist(nb, cats, wishlist, profiles);
     }
 
-    const booksForIndex = books.map(b => updatedStatus[b.id] ? {...b,conceptsStatus:"done"} : b);
+    // Reconstrói índice com todos os livros (usa currentBooks para evitar closure stale)
+    const booksForIndex = currentBooks.map(b =>
+      updatedStatus[b.id] ? {...b, conceptsStatus:"done"} : b
+    );
     const fullIndex = await rebuildConceptsIndex(dirHandle, booksForIndex, apiKey, existing);
     setConceptsIndex(fullIndex);
     setConceptsProcessing(false);
