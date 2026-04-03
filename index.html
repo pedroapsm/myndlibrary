@@ -118,6 +118,10 @@ const chatFileName = (bookId, profileId) =>
 const globalChatFileName = (profileId) =>
   `global_chats_${safeProfileKey(profileId)}.json`;
 
+// ── Nome do arquivo de embeddings para um livro ────────
+const embeddingsFileName = (bookId) =>
+  `${bookId}_embeddings.json`;
+
 function trimStr(v){
   return typeof v === "string" ? v.trim() : "";
 }
@@ -367,6 +371,98 @@ function detectPdfQuality(text="", pages=0){
       weirdRatio
     }
   };
+}
+
+// ─── Semantic Search (OpenAI Embeddings) ──────────────
+
+// Gera embedding de um texto via OpenAI API
+async function generateEmbedding(text, openaiKey){
+  const r = await fetch("https://api.openai.com/v1/embeddings", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Authorization": `Bearer ${openaiKey}`
+    },
+    body: JSON.stringify({
+      model: "text-embedding-3-small",
+      input: text.slice(0, 8000) // limite seguro por chunk
+    })
+  });
+  if(!r.ok){
+    const e = await r.json().catch(()=>({}));
+    throw new Error(e?.error?.message || `OpenAI HTTP ${r.status}`);
+  }
+  const data = await r.json();
+  return data.data[0].embedding; // array de 1536 floats
+}
+
+// Similaridade coseno entre dois vetores
+function cosineSimilarity(a, b){
+  let dot = 0, normA = 0, normB = 0;
+  for(let i = 0; i < a.length; i++){
+    dot   += a[i] * b[i];
+    normA += a[i] * a[i];
+    normB += b[i] * b[i];
+  }
+  if(!normA || !normB) return 0;
+  return dot / (Math.sqrt(normA) * Math.sqrt(normB));
+}
+
+// Gera embeddings de todos os chunks de um livro e salva na pasta
+// Formato salvo: [ { id, index, start, end, embedding: float[] }, ... ]
+async function generateAndSaveEmbeddings(bookId, chunks, dirHandle, openaiKey, onProgress){
+  const results = [];
+  for(let i = 0; i < chunks.length; i++){
+    const chunk = chunks[i];
+    const embedding = await generateEmbedding(chunk.content, openaiKey);
+    results.push({
+      id: chunk.id,
+      index: chunk.index,
+      start: chunk.start,
+      end: chunk.end,
+      embedding
+    });
+    onProgress?.(Math.round(((i + 1) / chunks.length) * 100));
+    // pausa mínima para não travar a UI em livros grandes
+    if(i % 10 === 0) await new Promise(r => setTimeout(r, 0));
+  }
+  await wf(dirHandle, embeddingsFileName(bookId), JSON.stringify(results));
+  return results;
+}
+
+// Carrega embeddings salvos de um livro (retorna null se não existir)
+async function loadEmbeddings(dirHandle, bookId){
+  const txt = await rf(dirHandle, embeddingsFileName(bookId));
+  if(!txt) return null;
+  try{
+    return JSON.parse(txt);
+  }catch{
+    return null;
+  }
+}
+
+// Seleciona os chunks mais relevantes usando similaridade semântica.
+// embeddings: resultado de loadEmbeddings (array com { index, start, end, embedding })
+// chunks: resultado de splitTextIntoChunks (para reconstruir o content)
+// queryEmbedding: embedding da pergunta do usuário
+async function semanticSelectChunks(chunks, embeddings, queryEmbedding, maxChunks=MAX_BOOK_CONTEXT_CHUNKS){
+  // Mapeia index -> content para reconstituir os chunks com content
+  const contentMap = {};
+  for(const c of chunks) contentMap[c.index] = c;
+
+  const scored = embeddings
+    .map(e => ({
+      ...contentMap[e.index],
+      embedding: e.embedding,
+      score: cosineSimilarity(queryEmbedding, e.embedding)
+    }))
+    .filter(e => e.content) // segurança: ignora se não achou o chunk
+    .sort((a, b) => b.score - a.score);
+
+  // Pega os melhores e reordena por posição no livro (para contexto contínuo)
+  return scored
+    .slice(0, maxChunks)
+    .sort((a, b) => a.index - b.index);
 }
 
 // ─── IndexedDB ────────────────────────────────────────
@@ -906,7 +1002,6 @@ function Toasts({items,onRemove}){
 }
 
 // ─── Suggestion Chips ─────────────────────────────────
-// AJUSTE 1: onSelect agora é chamado diretamente com o item ao clicar
 
 function SuggestionChips({items,onSelect,variant="default"}){
   const isGlobal = variant === "global";
@@ -1557,7 +1652,7 @@ function NotesPanel({dirHandle,bookId,profileId,otherProfiles,onNotesPresenceCha
 // ─── ChatArea ──────────────────────────────────────────
 
 const MODE_TOOLTIPS = {
-  basic: "Seleciona os trechos mais relevantes do livro. Rápido e econômico.",
+  basic: "Busca semântica com embeddings. Seleciona os trechos mais relevantes do livro.",
   deep:  "Envia o livro completo para o Claude. Respostas mais precisas e abrangentes."
 };
 
@@ -1699,7 +1794,6 @@ function ChatArea({messages,loading,onSend,placeholder,emptyNode,onExport,mode,s
               {m.role==="user" ? m.av : "✦"}
             </div>
 
-            {/* AJUSTE 7: padding reduzido de 13px/16px para 8px/12px */}
             <div
               style={{
                 padding:"8px 12px",
@@ -2054,7 +2148,7 @@ function HomePage({
                       {b.pages ? `${b.pages} pág.` : "—"}
                     </td>
                     <td style={{padding:"11px 12px",verticalAlign:"top"}}>
-                      {b.category ? <span style={{fontSize:11,padding:"3px 9px",borderRadius:12,background:c.bg,color:c.ink,border:`1px solid ${c.brd}`,fontWeight:600,display:"inline-block"}}>{b.category}</span> : <span style={{fontSize:11,color:C.inkF}}>—</span>}
+                      {b.category ? (()=>{ const c=catStyle(b.category); return <span style={{fontSize:11,padding:"3px 9px",borderRadius:12,background:c.bg,color:c.ink,border:`1px solid ${c.brd}`,fontWeight:600,display:"inline-block"}}>{b.category}</span>; })() : <span style={{fontSize:11,color:C.inkF}}>—</span>}
                     </td>
                     <td style={{padding:"11px 12px",color:C.inkF,verticalAlign:"top"}}>
                       <div title={joinTags(b.tags||[])} style={{lineHeight:1.5}}>
@@ -2068,7 +2162,6 @@ function HomePage({
                       <div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"nowrap"}}>
                         <button onClick={()=>onOpenBook(b)} style={{...bI,padding:"4px 8px",fontSize:12,fontWeight:600,color:C.inkD}}>Abrir</button>
                         <button onClick={()=>onEditBook(b)} style={{...bI,padding:"4px 6px"}}><Ico d={D.edit} sz={13}/></button>
-                        {/* AJUSTE 5: botão excluir da tabela fica vermelho no hover */}
                         <button
                           onClick={()=>onDeleteBook(b)}
                           style={{...bI,padding:"4px 6px",color:C.red,borderColor:C.red+"44",transition:"background .15s, color .15s, border-color .15s"}}
@@ -2156,6 +2249,7 @@ function HomePage({
 
 function Setup({onReady}){
   const [apiKey,setKey]=useState(()=>localStorage.getItem("mynd_apikey") || "");
+  const [openaiKey,setOpenaiKey]=useState(()=>localStorage.getItem("mynd_openai_apikey") || "");
   const [dir,setDir]=useState(null);
   const [dirName,setDirName]=useState("");
   const [profile,setProfile]=useState(()=>localStorage.getItem("mynd_user") || "");
@@ -2188,9 +2282,17 @@ function Setup({onReady}){
 
     await idbSet("dir",dir);
     await wf(dir,"apikey.txt",apiKey.trim());
+
+    // Salva chave OpenAI separada (pode ser vazia se usuário não quiser embeddings)
+    if(openaiKey.trim()){
+      await wf(dir,"openai_apikey.txt",openaiKey.trim());
+    }
+
     localStorage.setItem("mynd_user",name);
     localStorage.setItem("mynd_apikey",apiKey.trim());
-    onReady(dir,apiKey.trim(),name);
+    if(openaiKey.trim()) localStorage.setItem("mynd_openai_apikey",openaiKey.trim());
+
+    onReady(dir, apiKey.trim(), name, openaiKey.trim());
   };
 
   const ready=!!apiKey.trim() && !!dir && !!profile.trim();
@@ -2225,6 +2327,20 @@ function Setup({onReady}){
               placeholder="sk-ant-..."
               value={apiKey}
               onChange={e=>setKey(e.target.value)}
+            />
+          </div>
+
+          <div>
+            <div style={{...lb,marginBottom:8}}>Chave de API OpenAI <span style={{fontSize:10,color:C.inkF,textTransform:"none",letterSpacing:0,fontWeight:400}}>(para busca semântica no modo básico)</span></div>
+            <p style={{fontSize:14,color:C.inkF,lineHeight:1.6,marginBottom:10}}>
+              Crie sua chave em <a href="https://platform.openai.com/api-keys" target="_blank" style={{color:C.accent}}>platform.openai.com/api-keys</a>. Opcional — sem ela o modo básico usa busca por keywords.
+            </p>
+            <input
+              type="password"
+              style={fi}
+              placeholder="sk-..."
+              value={openaiKey}
+              onChange={e=>setOpenaiKey(e.target.value)}
             />
           </div>
 
@@ -2522,9 +2638,7 @@ function Sidebar({
         )}
       </div>
 
-      {/* AJUSTE 2: removida a linha separadora antes de "Biblioteca", apenas label inline */}
       <div style={{padding:"8px 11px 4px",flexShrink:0}}>
-        {/* AJUSTE 6: contador de resultados */}
         <div style={{display:"flex",alignItems:"center",justifyContent:"space-between"}}>
           <div style={{...sbLb,display:"flex",alignItems:"center",gap:4}}>
             <Ico d={D.book} sz={10}/> Biblioteca
@@ -2576,7 +2690,6 @@ function Sidebar({
         </div>
       </div>
 
-      {/* AJUSTE 4: animação de livros mais fluida com CSS transition em vez de animation keyframe por índice */}
       <div ref={booksScrollRef} className="inner-scroll" style={{flex:1,minHeight:0,overflowY:"auto",padding:"6px 0 12px 9px"}}>
         {sortedBooks.map((b)=>{
           const isActive = selBook?.id===b.id && screen==="book";
@@ -2651,7 +2764,6 @@ function Sidebar({
                     {b._hasNotes && <div style={{fontSize:10,color:"#c7e4ff"}}>Notas</div>}
                   </div>
 
-                  {/* AJUSTE 5: botão excluir da sidebar fica vermelho no hover */}
                   <button
                     onClick={(e)=>{
                       e.stopPropagation();
@@ -2736,7 +2848,7 @@ function WelcomeBook({onSend}){
 
 // ─── Library ──────────────────────────────────────────
 
-function Library({dirHandle,apiKey,userName:initUser}){
+function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}){
   const [books,setBooks] = useState([]);
   const [cats,setCats] = useState([...DEF_CATS]);
   const [profiles,setProfiles] = useState([]);
@@ -2745,6 +2857,7 @@ function Library({dirHandle,apiKey,userName:initUser}){
   const [screen,setScreen] = useState("home");
   const [selBook,setSelBook] = useState(null);
   const [bookText,setBookText] = useState("");
+  const [bookEmbeddings,setBookEmbeddings] = useState(null); // embeddings do livro aberto
   const [bookMsgs,setBookMsgs] = useState([]);
   const [chatSessions,setChatSessions] = useState([]);
   const [otherSessions,setOtherSessions] = useState({});
@@ -2759,7 +2872,7 @@ function Library({dirHandle,apiKey,userName:initUser}){
   const [chatLoading,setChatLoading] = useState(false);
   const [globalLoading,setGlobalLoading] = useState(false);
   const [openingBook,setOpeningBook] = useState(false);
-  const [chatMode,setChatMode] = useState("basic"); // "basic" | "deep"
+  const [chatMode,setChatMode] = useState("basic");
   const [bookHasPdf,setBookHasPdf] = useState(false);
   const [globalChatMode,setGlobalChatMode] = useState("basic");
 
@@ -2778,6 +2891,7 @@ function Library({dirHandle,apiKey,userName:initUser}){
   const [upErr,setUpErr] = useState("");
   const [uploadQualityAlert,setUploadQualityAlert] = useState("");
   const [userName,setUserName] = useState(initUser);
+  const [openaiKey] = useState(initOpenaiKey || ""); // chave OpenAI (read-only após init)
   const [lastBook,setLastBook] = useState(null);
   const [toasts,setToasts] = useState([]);
   const fileRef=useRef();
@@ -2952,7 +3066,7 @@ function Library({dirHandle,apiKey,userName:initUser}){
 
   const doAdd=async(fd)=>{
     setUploading(true);
-    setUpProg(15);
+    setUpProg(10);
     setUpErr("");
     setUploadQualityAlert("");
 
@@ -2970,14 +3084,14 @@ function Library({dirHandle,apiKey,userName:initUser}){
         setUploadQualityAlert(`O PDF pode ter sido extraído com baixa qualidade. ${quality.flags.join(" | ")}`);
       }
 
-      setUpProg(55);
+      setUpProg(35);
 
       let summary="";
       try{
         summary=await callClaude(apiKey,sysSummary(fd.title),[{role:"user",content:text.slice(0,20000)}],300);
       }catch{}
 
-      setUpProg(85);
+      setUpProg(55);
 
       const id=uid();
       const book={
@@ -2998,6 +3112,25 @@ function Library({dirHandle,apiKey,userName:initUser}){
       // Salvar PDF original para modo Profundo
       const pdfBuffer = await pendingFile.arrayBuffer();
       await wf(dirHandle,`${id}.pdf`, new Uint8Array(pdfBuffer));
+
+      setUpProg(65);
+
+      // ── Gerar e salvar embeddings (se chave OpenAI disponível) ──
+      if(openaiKey){
+        try{
+          const chunks = splitTextIntoChunks(text);
+          await generateAndSaveEmbeddings(id, chunks, dirHandle, openaiKey, pct=>{
+            // mapeia 0-100% do processo de embeddings para 65-95% da barra total
+            setUpProg(65 + Math.round(pct * 0.30));
+          });
+        }catch(embErr){
+          // Falha nos embeddings não impede salvar o livro
+          console.warn("Embeddings não gerados:", embErr.message);
+          pushToast("Aviso: embeddings não gerados. Modo básico usará busca por keywords.");
+        }
+      }
+
+      setUpProg(97);
 
       const nb=[...books,book];
       setBooks(nb);
@@ -3051,6 +3184,7 @@ function Library({dirHandle,apiKey,userName:initUser}){
     if(!confirm(`Remover "${book.title}"?`)) return;
 
     await rmf(dirHandle,`${book.id}.txt`);
+    await rmf(dirHandle,embeddingsFileName(book.id)); // remove embeddings junto
 
     const knownProfiles=Array.from(new Set([...(profiles||[]), userName].filter(Boolean)));
     for(const p of knownProfiles){
@@ -3080,6 +3214,7 @@ function Library({dirHandle,apiKey,userName:initUser}){
     if(selBook?.id===book.id){
       setSelBook(null);
       setBookText("");
+      setBookEmbeddings(null);
       setBookMsgs([]);
       setChatSessions([]);
       setOtherSessions({});
@@ -3167,12 +3302,17 @@ function Library({dirHandle,apiKey,userName:initUser}){
     setChatSessions([]);
     setOtherSessions({});
     setActiveChatId(null);
+    setBookEmbeddings(null);
     setChatMode("basic");
 
     await bumpStat(freshBook.id);
 
     const txt=await rf(dirHandle,`${freshBook.id}.txt`);
     setBookText(txt || "");
+
+    // Carregar embeddings salvos (se existirem)
+    const embs = await loadEmbeddings(dirHandle, freshBook.id);
+    setBookEmbeddings(embs);
 
     // Verificar se PDF original está disponível
     const pdfExists = await rf(dirHandle,`${freshBook.id}.pdf`);
@@ -3327,11 +3467,7 @@ function Library({dirHandle,apiKey,userName:initUser}){
       let r;
 
       if(chatMode==="deep" && bookHasPdf){
-        // Modo Profundo: envia o PDF completo
-        const pdfData = await rf(dirHandle,`${selBook.id}.pdf`);
-        if(!pdfData) throw new Error("PDF não encontrado na pasta.");
-
-        // rf retorna string, precisamos de base64
+        // Modo Profundo: envia o PDF completo (inalterado)
         const pdfHandle = await dirHandle.getFileHandle(`${selBook.id}.pdf`);
         const pdfFile = await pdfHandle.getFile();
         const pdfBuffer = await pdfFile.arrayBuffer();
@@ -3366,11 +3502,23 @@ function Library({dirHandle,apiKey,userName:initUser}){
           throw new Error(e?.error?.message || `HTTP ${response.status}`);
         }
         r=(await response.json()).content?.[0]?.text || "Sem resposta.";
+
       }else{
-        // Modo Básico: chunks relevantes
-        const chunks = selectRelevantChunks(bookText, txt, MAX_BOOK_CONTEXT_CHUNKS);
+        // ── Modo Básico: busca semântica com embeddings ──────────
+        let chunks;
+
+        if(bookEmbeddings && openaiKey){
+          // Caminho semântico: gera embedding da query e usa cosine similarity
+          const queryEmbedding = await generateEmbedding(txt, openaiKey);
+          const allChunks = splitTextIntoChunks(bookText);
+          chunks = await semanticSelectChunks(allChunks, bookEmbeddings, queryEmbedding, MAX_BOOK_CONTEXT_CHUNKS);
+        }else{
+          // Fallback: keywords (livros antigos sem embeddings, ou sem chave OpenAI)
+          chunks = selectRelevantChunks(bookText, txt, MAX_BOOK_CONTEXT_CHUNKS);
+        }
+
         const system = buildBookContextPrompt(selBook.title, txt, chunks);
-        r=await callClaude(apiKey,system,next);
+        r = await callClaude(apiKey, system, next);
       }
 
       const final=[...next,mkM("assistant",r)];
@@ -3393,7 +3541,7 @@ function Library({dirHandle,apiKey,userName:initUser}){
       let r;
 
       if(globalChatMode==="deep"){
-        // Modo Profundo: envia PDFs disponíveis
+        // Modo Profundo: envia PDFs disponíveis (inalterado)
         const candidateBooks = selectRelevantBooks(txt, books, globalTexts, MAX_GLOBAL_BOOKS);
         const contentBlocks = [];
 
@@ -3406,7 +3554,6 @@ function Library({dirHandle,apiKey,userName:initUser}){
             contentBlocks.push({ type:"text", text:`📖 ${book.title}${book.author ? ` | ${book.author}` : ""}:` });
             contentBlocks.push({ type:"document", source:{ type:"base64", media_type:"application/pdf", data:pdfBase64 } });
           }else{
-            // Fallback para chunks se não tiver PDF
             const chunks = selectRelevantChunks(globalTexts[book.id] || "", txt, MAX_GLOBAL_CHUNKS_PER_BOOK);
             const chunkText = chunks.map(c=>c.content).join("\n\n");
             contentBlocks.push({ type:"text", text:`📖 ${book.title}${book.author ? ` | ${book.author}` : ""}:\n${chunkText}` });
@@ -3439,7 +3586,7 @@ function Library({dirHandle,apiKey,userName:initUser}){
         }
         r=(await response.json()).content?.[0]?.text || "Sem resposta.";
       }else{
-        // Modo Básico: chunks
+        // Modo Básico global: keywords (inalterado)
         const candidateBooks = selectRelevantBooks(txt, books, globalTexts, MAX_GLOBAL_BOOKS);
         const entries = candidateBooks.map(book=>({
           book,
@@ -3491,7 +3638,6 @@ function Library({dirHandle,apiKey,userName:initUser}){
     await persist(nb,cats,wishlist,profiles);
   };
 
-  // suggestion chips para pesquisa global
   const globalSuggestionItems = [
     "Quais livros falam sobre estratégia?",
     "Compare os autores",
@@ -3579,6 +3725,12 @@ function Library({dirHandle,apiKey,userName:initUser}){
                   {selBook.pages ? <span style={{fontSize:13,color:C.inkF}}>{selBook.pages} pág.</span> : null}
                   {(selBook.category || selBook.pages) && (selBook.tags||[]).length > 0 ? <span style={{fontSize:12,color:C.inkF}}>•</span> : null}
                   {(selBook.tags||[]).length > 0 ? <span style={{fontSize:13,color:C.inkF}}>Tags: {(selBook.tags||[]).join(", ")}</span> : null}
+                  {/* Badge indicando se busca semântica está ativa */}
+                  {bookEmbeddings && openaiKey && (
+                    <span style={{fontSize:11,padding:"2px 8px",borderRadius:10,background:"rgba(30,92,46,.1)",color:"#1e5c2e",border:"1px solid rgba(30,92,46,.22)",fontWeight:600}}>
+                      ✦ semântico
+                    </span>
+                  )}
                 </div>
               </div>
               <button style={bI} onClick={()=>{setEditBook(selBook); setModal({type:"edit",initial:selBook});}}><Ico d={D.edit} sz={14}/></button>
@@ -3742,6 +3894,7 @@ function Root(){
   const [phase,setPhase]=useState("loading");
   const [dirHandle,setDir]=useState(null);
   const [apiKey,setKey]=useState("");
+  const [openaiKey,setOpenaiKey]=useState("");
   const [userName,setUser]=useState("");
 
   useEffect(()=>{
@@ -3752,6 +3905,7 @@ function Root(){
 
     const savedUser=localStorage.getItem("mynd_user");
     const savedKey=localStorage.getItem("mynd_apikey");
+    const savedOpenaiKey=localStorage.getItem("mynd_openai_apikey") || "";
 
     idbGet("dir").then(async dh=>{
       if(!dh){
@@ -3762,18 +3916,22 @@ function Root(){
         const perm=await dh.queryPermission({mode:"readwrite"});
         if(perm==="granted"){
           const k=savedKey || (await rf(dh,"apikey.txt")) || "";
+          // Tenta carregar chave OpenAI do arquivo também (fallback)
+          const oaik=savedOpenaiKey || (await rf(dh,"openai_apikey.txt")) || "";
           if(!k?.trim() || !savedUser){
             setPhase("setup");
             return;
           }
           setDir(dh);
           setKey(k.trim());
+          setOpenaiKey(oaik.trim());
           setUser(savedUser);
           setPhase("app");
         }else{
           setPhase("reconnect");
           window._pendingDir=dh;
           window._pendingKey=savedKey || "";
+          window._pendingOpenaiKey=savedOpenaiKey || "";
           window._pendingUser=savedUser || "";
         }
       }catch{
@@ -3808,6 +3966,7 @@ function Root(){
           return;
         }
         const k=window._pendingKey || (await rf(dh,"apikey.txt")) || "";
+        const oaik=window._pendingOpenaiKey || (await rf(dh,"openai_apikey.txt")) || "";
         const u=window._pendingUser;
         if(!k || !u){
           setPhase("setup");
@@ -3815,6 +3974,7 @@ function Root(){
         }
         setDir(dh);
         setKey(k.trim());
+        setOpenaiKey(oaik.trim());
         setUser(u);
         setPhase("app");
       }catch{
@@ -3842,10 +4002,10 @@ function Root(){
   }
 
   if(phase==="setup"){
-    return <Setup onReady={(dh,k,name)=>{ setDir(dh); setKey(k); setUser(name); setPhase("app"); }} />;
+    return <Setup onReady={(dh,k,name,oaik)=>{ setDir(dh); setKey(k); setUser(name); setOpenaiKey(oaik||""); setPhase("app"); }} />;
   }
 
-  return <Library dirHandle={dirHandle} apiKey={apiKey} userName={userName}/>;
+  return <Library dirHandle={dirHandle} apiKey={apiKey} userName={userName} openaiKey={openaiKey}/>;
 }
 
 ReactDOM.createRoot(document.getElementById("root")).render(<Root/>);
