@@ -183,7 +183,8 @@ function normalizeBooks(books){
     category: normalizeCategory(book?.category),
     tags: normalizeTags(book?.tags),
     pages: Number(book?.pages) || 0,
-    summary: trimStr(book?.summary),
+    synopsis: book?.synopsis ?? null,
+    synopsisStatus: book?.synopsisStatus ?? "pending",
     addedAt: book?.addedAt || new Date().toISOString()
   }))
   .filter(b => b.title);
@@ -337,7 +338,7 @@ function selectRelevantBooks(query="", books=[], texts={}, limit=MAX_GLOBAL_BOOK
       book.author || "",
       book.category || "",
       (book.tags || []).join(" "),
-      book.summary || "",
+      book.synopsis || "",
       (texts[book.id] || "").slice(0, 12000)
     ].join("\n");
 
@@ -584,9 +585,9 @@ function analyzeRetrievalQuality(scoredChunks=[], totalChunks=1){
 // Orquestra a decisão de modo no Automático.
 // Retorna { mode: "basic"|"deep", intent, quality, uiLabel, reason }
 // uiLabel é o texto curto para o badge na UI.
-async function decideAutoMode(query, bookText, bookEmbeddings, openaiKey, bookHasPdf){
+async function decideAutoMode(query, bookText, bookEmbeddings, openaiKey, bookCanUseDeep){
   const intent = classifyQueryIntent(query);
-  const canDeep = bookHasPdf; // extensível: aqui entra qualidade do texto no futuro
+  const canDeep = bookCanUseDeep; // extensível: aqui entra qualidade do texto no futuro
 
   // ── Passo 1: intenção global ──────────────────────
   if(intent === "global"){
@@ -595,7 +596,7 @@ async function decideAutoMode(query, bookText, bookEmbeddings, openaiKey, bookHa
       console.log("[Automático]", { query, ...result });
       return result;
     } else {
-      const result = { mode:"basic", intent, quality:null, uiLabel:"deep indisponível", reason:"intenção global mas PDF não disponível" };
+      const result = { mode:"basic", intent, quality:null, uiLabel:"visão global indisponível", reason:"intenção global mas visão global indisponível" };
       console.log("[Automático]", { query, ...result });
       return result;
     }
@@ -603,15 +604,16 @@ async function decideAutoMode(query, bookText, bookEmbeddings, openaiKey, bookHa
 
   // ── Passo 2: tenta básico e avalia qualidade ──────
   let scoredChunks = [];
+  let allChunks = [];
+  let queryEmbedding = null;
   let totalChunks = 1;
 
   if(bookEmbeddings && openaiKey){
     try{
-      const queryEmbedding = await generateEmbedding(query, openaiKey);
-      const allChunks = splitTextIntoChunks(bookText);
+      queryEmbedding = await generateEmbedding(query, openaiKey);
+      allChunks = splitTextIntoChunks(bookText);
       totalChunks = allChunks.length || 1;
 
-      // Pontua todos os chunks para análise (não limita aqui)
       const contentMap = {};
       for(const c of allChunks) contentMap[c.index] = c;
 
@@ -641,46 +643,47 @@ async function decideAutoMode(query, bookText, bookEmbeddings, openaiKey, bookHa
     qualityReason: analysis.reason
   });
 
+  // Helper: adiciona queryEmbedding, scoredChunks e allChunks ao resultado
+  // para evitar recalcular em sendBook
+  const withCache = (r) => ({ ...r, queryEmbedding, scoredChunks, allChunks });
+
   // ── Passo 3: decisão por intent + qualidade ───────
-  // local: high ou borderline → basic; low → deep
   if(intent === "local"){
     if(analysis.quality === "low" && canDeep){
       const result = { mode:"deep", intent, quality:analysis.quality, uiLabel:"visão global", reason:`local mas retrieval fraco: ${analysis.reason}` };
       console.log("[Automático] decisão:", result.mode, result.reason);
-      return result;
+      return withCache(result);
     }
     const result = { mode:"basic", intent, quality:analysis.quality, uiLabel:"trechos relevantes", reason:`local, qualidade ${analysis.quality}` };
     console.log("[Automático] decisão:", result.mode, result.reason);
-    return result;
+    return withCache(result);
   }
 
-  // ambiguous: high → basic; low → deep; borderline + spread alto → deep
   if(intent === "ambiguous"){
     if(analysis.quality === "high"){
       const result = { mode:"basic", intent, quality:analysis.quality, uiLabel:"trechos relevantes", reason:`ambíguo, qualidade alta` };
       console.log("[Automático] decisão:", result.mode, result.reason);
-      return result;
+      return withCache(result);
     }
     if(analysis.quality === "low" && canDeep){
       const result = { mode:"deep", intent, quality:analysis.quality, uiLabel:"visão global", reason:`ambíguo, retrieval fraco: ${analysis.reason}` };
       console.log("[Automático] decisão:", result.mode, result.reason);
-      return result;
+      return withCache(result);
     }
-    // borderline: spread alto é desempate
     if(analysis.quality === "borderline" && analysis.positionSpread > AUTO_MAX_POSITION_SPREAD && canDeep){
       const result = { mode:"deep", intent, quality:analysis.quality, uiLabel:"visão global", reason:`ambíguo, borderline + fragmentado (spread=${analysis.positionSpread.toFixed(2)})` };
       console.log("[Automático] decisão:", result.mode, result.reason);
-      return result;
+      return withCache(result);
     }
     const result = { mode:"basic", intent, quality:analysis.quality, uiLabel:"trechos relevantes", reason:`ambíguo, borderline sem spread decisivo` };
     console.log("[Automático] decisão:", result.mode, result.reason);
-    return result;
+    return withCache(result);
   }
 
   // fallback seguro
   const result = { mode:"basic", intent, quality:analysis.quality, uiLabel:"trechos relevantes", reason:"fallback" };
   console.log("[Automático] decisão:", result.mode, result.reason);
-  return result;
+  return withCache(result);
 }
 
 // ─── IndexedDB ────────────────────────────────────────
@@ -990,7 +993,17 @@ BIBLIOTECA SELECIONADA:
 ${body}`;
 }
 
-const sysSummary=title=>`Leia o trecho do livro "${title}" e escreva um resumo em 3 frases em português: (1) do que trata, (2) para quem é ideal, (3) principal aprendizado. Apenas as 3 frases, sem introdução.`;
+// Busca sinopse externa via Claude (título + autor, sem usar o texto do PDF)
+async function fetchBookSynopsis(apiKey, title, author){
+  const query = author ? `${title} — ${author}` : title;
+  const r = await callClaude(
+    apiKey,
+    `Você é um assistente literário. Baseado no seu conhecimento geral, escreva uma sinopse concisa do livro em português (4 a 6 frases): do que trata, contexto, para quem é indicado e por que vale a pena ler. Seja direto. Não mencione que está usando conhecimento externo.`,
+    [{ role:"user", content:`Livro: ${query}` }],
+    400
+  );
+  return r;
+}
 
 // ─── Theme ────────────────────────────────────────────
 
@@ -1635,9 +1648,95 @@ function NoteCard({note,onEdit,onDelete,readonly=false,ownerName=""}){
   );
 }
 
-// ─── Notes Panel ──────────────────────────────────────
+// ─── Saved Notes Modal ────────────────────────────────
 
-function NotesPanel({dirHandle,bookId,profileId,otherProfiles,onNotesPresenceChange,onToast}){
+function SavedNotesModal({myNotes, otherNotes, profileId, onClose, onEdit, onDelete}){
+  const [selected, setSelected] = useState(null);
+
+  // Flatten all notes with owner info
+  const allNotes = useMemo(()=>{
+    const mine = myNotes.map(n => ({ ...n, owner: profileId, isMine: true }));
+    const others = Object.entries(otherNotes).flatMap(([p, notes]) =>
+      notes.map(n => ({ ...n, owner: p, isMine: false }))
+    );
+    return [...mine, ...others].sort((a,b) => new Date(b.updatedAt) - new Date(a.updatedAt));
+  }, [myNotes, otherNotes, profileId]);
+
+  return(
+    <div style={ov} onClick={e=>{ if(e.target===e.currentTarget) onClose(); }}>
+      <div style={{...mb, width:560, maxHeight:"80vh", display:"flex", flexDirection:"column"}}>
+        <div style={{display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:16}}>
+          <div style={{fontSize:18, fontWeight:700, color:C.ink, display:"flex", alignItems:"center", gap:8}}>
+            <Ico d={D.note} sz={16}/> Notas Salvas
+          </div>
+          <button onClick={onClose} style={{...bI, padding:"5px"}}><Ico d={D.close} sz={14}/></button>
+        </div>
+
+        {allNotes.length === 0 && (
+          <p style={{fontSize:14, color:C.inkF, fontStyle:"italic"}}>Nenhuma nota salva ainda.</p>
+        )}
+
+        <div style={{display:"flex", gap:12, flex:1, overflow:"hidden", minHeight:0}}>
+          {/* Lista */}
+          <div className="inner-scroll" style={{width:200, minWidth:200, overflowY:"auto", display:"flex", flexDirection:"column", gap:4}}>
+            {allNotes.map(note=>(
+              <button
+                key={`${note.owner}_${note.id}`}
+                onClick={()=>setSelected(note)}
+                style={{
+                  textAlign:"left", padding:"8px 10px", borderRadius:7,
+                  border:`1px solid ${selected?.id===note.id && selected?.owner===note.owner ? C.accentBrd : C.border}`,
+                  background:selected?.id===note.id && selected?.owner===note.owner ? C.accentBg : C.card,
+                  cursor:"pointer"
+                }}
+              >
+                <div style={{fontSize:11, fontWeight:600, color:note.isMine ? C.accent : C.gold, marginBottom:3, letterSpacing:"0.08em", textTransform:"uppercase"}}>
+                  {note.owner}
+                </div>
+                <div style={{fontSize:12, color:C.inkD, lineHeight:1.4, overflow:"hidden", display:"-webkit-box", WebkitLineClamp:2, WebkitBoxOrient:"vertical"}}>
+                  {note.text}
+                </div>
+                <div style={{fontSize:10, color:C.inkF, marginTop:4}}>
+                  {new Date(note.updatedAt).toLocaleDateString("pt-BR")}
+                </div>
+              </button>
+            ))}
+          </div>
+
+          {/* Detalhe */}
+          <div className="inner-scroll" style={{flex:1, overflowY:"auto"}}>
+            {selected ? (
+              <div style={{background:C.bg, border:`1px solid ${C.border}`, borderRadius:9, padding:"14px 16px"}}>
+                <div style={{display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:10}}>
+                  <div style={{fontSize:11, fontWeight:600, color:selected.isMine ? C.accent : C.gold, letterSpacing:"0.1em", textTransform:"uppercase"}}>
+                    {selected.owner} · {new Date(selected.updatedAt).toLocaleString("pt-BR")}
+                  </div>
+                  {selected.isMine && (
+                    <div style={{display:"flex", gap:6}}>
+                      <button onClick={()=>{ onEdit(selected); onClose(); }} style={{...bI, padding:"4px 8px"}}><Ico d={D.edit} sz={12}/></button>
+                      <button onClick={()=>{ onDelete(selected.id); setSelected(null); }} style={{...bI, padding:"4px 8px", color:C.red, borderColor:C.red+"44"}}><Ico d={D.trash} sz={12}/></button>
+                    </div>
+                  )}
+                </div>
+                <div style={{whiteSpace:"pre-wrap", fontSize:14, color:C.inkD, lineHeight:1.7}}>
+                  {selected.text}
+                </div>
+              </div>
+            ) : (
+              <div style={{display:"flex", alignItems:"center", justifyContent:"center", height:"100%", color:C.inkF, fontSize:13, fontStyle:"italic"}}>
+                Selecione uma nota para ver
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Notes Panel (50/50 layout) ───────────────────────
+
+function NotesPanel({dirHandle,bookId,profileId,otherProfiles,synopsis,synopsisStatus,onNotesPresenceChange,onToast}){
   const [myNotes,setMyNotes]=useState([]);
   const [saveState,setSaveState]=useState(null);
   const [ready,setReady]=useState(false);
@@ -1645,8 +1744,9 @@ function NotesPanel({dirHandle,bookId,profileId,otherProfiles,onNotesPresenceCha
   const [otherNotes,setOtherNotes]=useState({});
   const [draft,setDraft]=useState("");
   const [editingId,setEditingId]=useState(null);
+  const [showSavedModal,setShowSavedModal]=useState(false);
 
-  const tabs = useMemo(()=>[profileId, ...otherProfiles, "Todas"], [profileId,otherProfiles]);
+  const tabs = useMemo(()=>[profileId, ...otherProfiles], [profileId,otherProfiles]);
 
   const refreshMine=useCallback(async()=>{
     const notes=await loadNotes(dirHandle,bookId,profileId);
@@ -1655,9 +1755,7 @@ function NotesPanel({dirHandle,bookId,profileId,otherProfiles,onNotesPresenceCha
     setReady(true);
   },[dirHandle,bookId,profileId,onNotesPresenceChange]);
 
-  useEffect(()=>{
-    refreshMine();
-  },[refreshMine]);
+  useEffect(()=>{ refreshMine(); },[refreshMine]);
 
   useEffect(()=>{
     const loadOthers=async()=>{
@@ -1676,7 +1774,7 @@ function NotesPanel({dirHandle,bookId,profileId,otherProfiles,onNotesPresenceCha
     setDraft("");
     setEditingId(null);
     setSaveState(null);
-  },[bookId, profileId]);
+  },[bookId,profileId]);
 
   const saveList=async(next)=>{
     setMyNotes(next);
@@ -1684,184 +1782,162 @@ function NotesPanel({dirHandle,bookId,profileId,otherProfiles,onNotesPresenceCha
     await saveNotes(dirHandle,bookId,profileId,next);
     onNotesPresenceChange?.(next.length > 0);
     setSaveState("saved");
-    setTimeout(()=>setSaveState(current=>current==="saved" ? null : current), 1200);
+    setTimeout(()=>setSaveState(c=>c==="saved"?null:c),1200);
   };
 
   const addOrUpdate=async()=>{
     const text=draft.trim();
     if(!text) return;
-
     if(editingId){
-      const next=myNotes.map(n=>n.id===editingId ? {...n,text,updatedAt:new Date().toISOString()} : n);
+      const next=myNotes.map(n=>n.id===editingId?{...n,text,updatedAt:new Date().toISOString()}:n);
       await saveList(next);
       setEditingId(null);
       onToast?.("Nota atualizada");
     }else{
-      const next=[{
-        id:uid(),
-        text,
-        createdAt:new Date().toISOString(),
-        updatedAt:new Date().toISOString()
-      }, ...myNotes];
+      const next=[{id:uid(),text,createdAt:new Date().toISOString(),updatedAt:new Date().toISOString()},...myNotes];
       await saveList(next);
       onToast?.("Nota salva");
     }
     setDraft("");
   };
 
-  const startEdit=(note)=>{
-    setDraft(note.text);
-    setEditingId(note.id);
-  };
+  const startEdit=(note)=>{ setDraft(note.text); setEditingId(note.id); };
 
   const removeNote=async(id)=>{
     const next=myNotes.filter(n=>n.id!==id);
     await saveList(next);
-    if(editingId===id){
-      setEditingId(null);
-      setDraft("");
-    }
+    if(editingId===id){ setEditingId(null); setDraft(""); }
     onToast?.("Nota excluída");
   };
 
   const exportNotes=()=>{
     if(!myNotes.length) return;
-    const txt = myNotes.map((n,i)=>(
-      `Nota ${i+1} — ${new Date(n.updatedAt).toLocaleString("pt-BR")}\n${"─".repeat(40)}\n${n.text}`
-    )).join("\n\n");
-    const blob = new Blob([`Notas — ${profileId}\n${"═".repeat(40)}\n\n${txt}`],{type:"text/plain"});
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    a.download = `notas_${bookId}_${profileId}.txt`;
-    a.click();
+    const txt=myNotes.map((n,i)=>`Nota ${i+1} — ${new Date(n.updatedAt).toLocaleString("pt-BR")}\n${"─".repeat(40)}\n${n.text}`).join("\n\n");
+    const blob=new Blob([`Notas — ${profileId}\n${"═".repeat(40)}\n\n${txt}`],{type:"text/plain"});
+    const a=document.createElement("a"); a.href=URL.createObjectURL(blob);
+    a.download=`notas_${bookId}_${profileId}.txt`; a.click();
     onToast?.("Notas exportadas");
   };
 
   if(!ready) return null;
 
-  const renderOwnSection = () => (
-    <div>
-      <div style={{background:C.surf,border:`1px solid ${C.border}`,borderRadius:9,padding:"10px 10px 9px",marginBottom:10}}>
-        <textarea
-          value={draft}
-          onChange={e=>setDraft(e.target.value)}
-          placeholder="Escreva uma nota"
-          style={{
-            ...fi, resize:"vertical", minHeight:66, lineHeight:1.65, fontSize:14,
-            border:"none", background:"transparent", padding:0
-          }}
-        />
-        <div style={{display:"flex",justifyContent:"flex-end",gap:8,marginTop:8}}>
-          {editingId && <button onClick={()=>{setEditingId(null); setDraft("");}} style={bG}>Cancelar</button>}
-          <button onClick={addOrUpdate} style={bP(!draft.trim())} disabled={!draft.trim()}>
-            <Ico d={editingId?D.check:D.save} sz={15} col={draft.trim()?C.surf:"#999"} style={{marginRight:8}}/>
-            {editingId ? "Salvar edição" : "Salvar nota"}
-          </button>
-        </div>
-      </div>
+  const totalNotes = myNotes.length + Object.values(otherNotes).reduce((s,n)=>s+n.length,0);
 
-      {myNotes.length===0
-        ? <p style={{fontSize:14,color:C.inkF,fontStyle:"italic",padding:"2px 0 6px"}}>Nenhuma nota salva ainda.</p>
-        : myNotes.map(note=>(
-            <NoteCard
-              key={note.id}
-              note={note}
-              onEdit={()=>startEdit(note)}
-              onDelete={()=>removeNote(note.id)}
-            />
-          ))
-      }
-    </div>
-  );
-
-  const renderReadOnlySection = (name, notes) => (
-    <div style={{marginBottom:10}}>
-      <div style={{...lb,marginBottom:6,color:C.gold,fontSize:10}}>{name}</div>
-      {notes.length === 0
-        ? <p style={{fontSize:14,color:C.inkF,fontStyle:"italic",padding:"2px 0 6px"}}>Nenhuma nota.</p>
-        : notes.map(note=>(
-            <NoteCard key={note.id} note={note} readonly ownerName={name} />
-          ))
-      }
-    </div>
-  );
+  const notesInView = viewMode === profileId ? myNotes : (otherNotes[viewMode] || []);
+  const isOwn = viewMode === profileId;
 
   return(
-    <div style={{padding:"10px 28px 0"}}>
-      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:6,gap:10,flexWrap:"wrap"}}>
-        <div style={{...lb,display:"flex",alignItems:"center",gap:6}}>
-          <Ico d={D.note} sz={11}/> Notas
-          {myNotes.length > 0 && (
-            <button
-              onClick={exportNotes}
-              title="Exportar notas"
-              style={{...bI,padding:"2px 6px",marginLeft:4,display:"flex",alignItems:"center",gap:4,fontSize:11}}
-            >
-              <Ico d={D.dl} sz={11}/> Exportar
-            </button>
-          )}
-        </div>
+    <div style={{padding:"10px 28px 0", display:"flex", gap:16}}>
 
-        <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
-          <div style={{display:"flex",gap:4,flexWrap:"wrap"}}>
-            {tabs.map(label=>(
-              <button
-                key={label}
-                onClick={()=>setViewMode(label)}
-                style={{
-                  fontSize:12,
-                  padding:"3px 9px",
-                  borderRadius:5,
-                  border:`1px solid ${viewMode===label?C.accentBrd:C.border}`,
-                  background:viewMode===label?C.accentBg:"none",
-                  cursor:"pointer",
-                  color:viewMode===label?C.accent:C.inkF,
-                  fontWeight:label==="Todas" ? 700 : 500
-                }}
-              >
-                {label}
+      {/* ── Lado esquerdo: Notas ── */}
+      <div style={{flex:1, minWidth:0}}>
+        {/* Header */}
+        <div style={{display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:8, gap:8, flexWrap:"wrap"}}>
+          <div style={{display:"flex", alignItems:"center", gap:6}}>
+            <div style={{...lb, display:"flex", alignItems:"center", gap:5}}>
+              <Ico d={D.note} sz={11}/> Notas
+            </div>
+            {myNotes.length > 0 && (
+              <button onClick={exportNotes} title="Exportar" style={{...bI,padding:"2px 6px",display:"flex",alignItems:"center",gap:3,fontSize:11}}>
+                <Ico d={D.dl} sz={11}/> Exportar
               </button>
-            ))}
+            )}
+            <button
+              onClick={()=>setShowSavedModal(true)}
+              style={{...bI, padding:"2px 8px", display:"flex", alignItems:"center", gap:4, fontSize:11,
+                background: totalNotes > 0 ? C.goldBg : "none",
+                borderColor: totalNotes > 0 ? C.goldBrd : C.border,
+                color: totalNotes > 0 ? C.gold : C.inkF
+              }}
+            >
+              <Ico d={D.list} sz={11}/> Notas Salvas {totalNotes > 0 && `(${totalNotes})`}
+            </button>
           </div>
 
-          {saveState && (
-            <span style={{fontSize:12,color:saveState==="saved"?C.green:C.inkF,transition:"color .3s"}}>
-              {saveState==="saved" ? "✓ salvo" : "salvando…"}
-            </span>
+          <div style={{display:"flex", alignItems:"center", gap:6, flexWrap:"wrap"}}>
+            <div style={{display:"flex", gap:3}}>
+              {tabs.map(label=>(
+                <button key={label} onClick={()=>setViewMode(label)} style={{
+                  fontSize:11, padding:"2px 8px", borderRadius:5, cursor:"pointer",
+                  border:`1px solid ${viewMode===label?C.accentBrd:C.border}`,
+                  background:viewMode===label?C.accentBg:"none",
+                  color:viewMode===label?C.accent:C.inkF, fontWeight:500
+                }}>{label}</button>
+              ))}
+            </div>
+            {saveState && (
+              <span style={{fontSize:11, color:saveState==="saved"?C.green:C.inkF}}>
+                {saveState==="saved" ? "✓ salvo" : "salvando…"}
+              </span>
+            )}
+          </div>
+        </div>
+
+        {/* Editor (só para próprias notas) */}
+        {isOwn && (
+          <div style={{background:C.surf, border:`1px solid ${C.border}`, borderRadius:8, padding:"8px 10px", marginBottom:8}}>
+            <textarea
+              value={draft}
+              onChange={e=>setDraft(e.target.value)}
+              placeholder="Escreva uma nota"
+              style={{...fi, resize:"vertical", minHeight:58, lineHeight:1.6, fontSize:13, border:"none", background:"transparent", padding:0}}
+            />
+            <div style={{display:"flex", justifyContent:"flex-end", gap:7, marginTop:6}}>
+              {editingId && <button onClick={()=>{setEditingId(null); setDraft("");}} style={bG}>Cancelar</button>}
+              <button onClick={addOrUpdate} style={bP(!draft.trim())} disabled={!draft.trim()}>
+                <Ico d={editingId?D.check:D.save} sz={13} col={draft.trim()?C.surf:"#999"} style={{marginRight:6}}/>
+                {editingId ? "Salvar edição" : "Salvar nota"}
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Lista de notas */}
+        <div className="inner-scroll" style={{maxHeight:160, overflowY:"auto"}}>
+          {notesInView.length === 0
+            ? <p style={{fontSize:13, color:C.inkF, fontStyle:"italic", padding:"2px 0"}}>Nenhuma nota.</p>
+            : notesInView.map(note=>(
+                <NoteCard
+                  key={note.id}
+                  note={note}
+                  onEdit={isOwn ? ()=>startEdit(note) : undefined}
+                  onDelete={isOwn ? ()=>removeNote(note.id) : undefined}
+                  readonly={!isOwn}
+                  ownerName={!isOwn ? viewMode : ""}
+                />
+              ))
+          }
+        </div>
+      </div>
+
+      {/* ── Lado direito: Sinopse ── */}
+      <div style={{flex:1, minWidth:0}}>
+        <div style={{...lb, marginBottom:8, display:"flex", alignItems:"center", gap:5}}>
+          <Ico d={D.book} sz={11}/> Sinopse
+        </div>
+        <div style={{background:C.card, border:`1px solid ${C.border}`, borderRadius:8, padding:"12px 14px", minHeight:100}}>
+          {synopsis ? (
+            <p style={{fontSize:13.5, color:C.inkD, lineHeight:1.75}}>{synopsis}</p>
+          ) : synopsisStatus === "pending" ? (
+            <p style={{fontSize:13, color:C.inkF, fontStyle:"italic", lineHeight:1.6}}>
+              Sinopse ainda não gerada. Será buscada automaticamente quando disponível.
+            </p>
+          ) : (
+            <p style={{fontSize:13, color:C.inkF, fontStyle:"italic"}}>Sinopse indisponível.</p>
           )}
         </div>
       </div>
 
-      {viewMode === profileId && renderOwnSection()}
-
-      {viewMode !== profileId && viewMode !== "Todas" && (
-        renderReadOnlySection(viewMode, otherNotes[viewMode] || [])
-      )}
-
-      {viewMode === "Todas" && (
-        <div>
-          <div style={{marginBottom:10}}>
-            <div style={{...lb,marginBottom:6,color:C.accent,fontSize:10}}>{profileId}</div>
-            {myNotes.length===0
-              ? <p style={{fontSize:14,color:C.inkF,fontStyle:"italic",padding:"2px 0 6px"}}>Nenhuma nota.</p>
-              : myNotes.map(note=>(
-                  <NoteCard
-                    key={note.id}
-                    note={note}
-                    onEdit={()=>startEdit(note)}
-                    onDelete={()=>removeNote(note.id)}
-                    ownerName={profileId}
-                  />
-                ))
-            }
-          </div>
-
-          {otherProfiles.map(p=>(
-            <div key={p}>
-              {renderReadOnlySection(p, otherNotes[p] || [])}
-            </div>
-          ))}
-        </div>
+      {/* Modal de notas salvas */}
+      {showSavedModal && (
+        <SavedNotesModal
+          myNotes={myNotes}
+          otherNotes={otherNotes}
+          profileId={profileId}
+          onClose={()=>setShowSavedModal(false)}
+          onEdit={note=>{ startEdit(note); setShowSavedModal(false); }}
+          onDelete={removeNote}
+        />
       )}
     </div>
   );
@@ -1870,7 +1946,7 @@ function NotesPanel({dirHandle,bookId,profileId,otherProfiles,onNotesPresenceCha
 // ─── ChatArea ──────────────────────────────────────────
 
 const MODE_TOOLTIPS = {
-  auto:  "Decide automaticamente entre trechos ou visão global com base na pergunta e qualidade do retrieval.",
+  auto:  "Escolhe automaticamente o melhor modo para cada pergunta. Pode usar trechos ou o livro inteiro.",
   basic: "Busca semântica com embeddings. Seleciona os trechos mais relevantes do livro.",
   deep:  "Envia o livro completo para o Claude. Respostas mais precisas e abrangentes."
 };
@@ -1938,7 +2014,7 @@ function ModeToggle({mode, setMode, deepDisabled}){
               }
             }}
             >
-              {disabled ? "PDF não disponível para este livro" : MODE_TOOLTIPS[id]}
+              {disabled ? "Visão global indisponível para este livro" : MODE_TOOLTIPS[id]}
               <div style={{
                 position:"absolute",
                 top:"100%",
@@ -3096,7 +3172,7 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
   const [globalLoading,setGlobalLoading] = useState(false);
   const [openingBook,setOpeningBook] = useState(false);
   const [chatMode,setChatMode] = useState("auto");
-  const [bookHasPdf,setBookHasPdf] = useState(false);
+  const [bookCanUseDeep,setBookCanUseDeep] = useState(false);
   const [globalChatMode,setGlobalChatMode] = useState("auto");
 
   const [searchQ,setSearchQ] = useState("");
@@ -3309,10 +3385,15 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
 
       setUpProg(35);
 
-      let summary="";
+      // ── Buscar sinopse externa via API (título + autor) ──
+      let synopsis = null;
+      let synopsisStatus = "pending";
       try{
-        summary=await callClaude(apiKey,sysSummary(fd.title),[{role:"user",content:text.slice(0,20000)}],300);
-      }catch{}
+        synopsis = await fetchBookSynopsis(apiKey, trimStr(fd.title), trimStr(fd.author));
+        synopsisStatus = "done";
+      }catch{
+        // Falha silenciosa — synopsisStatus permanece "pending", será tentado ao abrir o livro
+      }
 
       setUpProg(55);
 
@@ -3324,7 +3405,8 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
         category: nextCats.includes(normalizedCategory) ? normalizedCategory : "",
         tags:normalizeTags(fd.tags),
         pages,
-        summary,
+        synopsis,
+        synopsisStatus,
         addedAt:new Date().toISOString(),
         _hasNotes:false,
         _hasChats:false
@@ -3539,8 +3621,8 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
     setBookEmbeddings(embs);
 
     // Verificar se PDF original está disponível
-    const pdfExists = await rf(dirHandle,`${freshBook.id}.pdf`);
-    setBookHasPdf(!!pdfExists);
+    const deepAvailable = await rf(dirHandle,`${freshBook.id}.pdf`);
+    setBookCanUseDeep(!!deepAvailable);
 
     const sessions=await loadChats(dirHandle,freshBook.id,userName);
     setChatSessions(sessions);
@@ -3564,6 +3646,19 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
     }
 
     setOpeningBook(false);
+
+    // ── Tentar buscar sinopse pendente silenciosamente ──
+    if(freshBook.synopsisStatus === "pending" || (!freshBook.synopsis && freshBook.synopsisStatus !== "done")){
+      fetchBookSynopsis(apiKey, freshBook.title, freshBook.author)
+        .then(async synopsis => {
+          const updated = { ...freshBook, synopsis, synopsisStatus:"done" };
+          setSelBook(updated);
+          const nb = books.map(b => b.id === freshBook.id ? updated : b);
+          setBooks(nb);
+          await persist(nb, cats, wishlist, profiles);
+        })
+        .catch(() => { /* silencioso — tenta na próxima abertura */ });
+    }
   };
 
   const newChat=()=>{
@@ -3696,13 +3791,13 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
       let decision = null;
 
       if(chatMode === "auto"){
-        decision = await decideAutoMode(txt, bookText, bookEmbeddings, openaiKey, bookHasPdf);
+        decision = await decideAutoMode(txt, bookText, bookEmbeddings, openaiKey, bookCanUseDeep);
         setAutoDecision(decision);
         effectiveMode = decision.mode;
       }
 
       // ── Modo Profundo ──────────────────────────────────────
-      if(effectiveMode === "deep" && bookHasPdf){
+      if(effectiveMode === "deep" && bookCanUseDeep){
         // Prefixo transparente se veio do automático
         const autoNote = decision
           ? `🔍 *Automático: usando visão global — ${decision.reason}*\n\n`
@@ -3746,19 +3841,29 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
 
       }else{
         // ── Modo Básico: busca semântica com embeddings ────────
-        // Se chegou aqui pelo automático com decisão "deep" mas sem PDF,
-        // o autoNote avisa o usuário.
-        const autoNote = (decision && decision.mode === "deep" && !bookHasPdf)
-          ? `⚠️ *Automático: visão global recomendada mas PDF indisponível — usando trechos.*\n\n`
+        const autoNote = (decision && decision.mode === "deep" && !bookCanUseDeep)
+          ? `⚠️ *Automático: visão global recomendada mas indisponível — usando trechos.*\n\n`
           : "";
 
         let chunks;
         if(bookEmbeddings && openaiKey){
-          // Se o auto já calculou os chunks pontuados internamente, reaproveitamos
-          // gerando o embedding da query de novo (custo mínimo, garante consistência)
-          const queryEmbedding = await generateEmbedding(txt, openaiKey);
-          const allChunks = splitTextIntoChunks(bookText);
-          chunks = await semanticSelectChunks(allChunks, bookEmbeddings, queryEmbedding, MAX_BOOK_CONTEXT_CHUNKS);
+          // Reutiliza embedding e chunks já calculados pelo decideAutoMode (sem nova chamada à API)
+          // Se veio do modo manual (basic), calcula agora pela primeira vez
+          const cachedScoredChunks = decision?.scoredChunks;
+          const cachedAllChunks    = decision?.allChunks;
+          const cachedEmbedding    = decision?.queryEmbedding;
+
+          if(cachedScoredChunks?.length && cachedAllChunks?.length){
+            // Reordena por posição e limita — sem nova chamada
+            chunks = cachedScoredChunks
+              .slice(0, MAX_BOOK_CONTEXT_CHUNKS)
+              .sort((a,b) => a.index - b.index);
+          }else{
+            // Modo manual básico: calcula agora
+            const qEmb = cachedEmbedding || await generateEmbedding(txt, openaiKey);
+            const allCh = splitTextIntoChunks(bookText);
+            chunks = await semanticSelectChunks(allCh, bookEmbeddings, qEmb, MAX_BOOK_CONTEXT_CHUNKS);
+          }
         }else{
           // Fallback: keywords (livros antigos sem embeddings, ou sem chave OpenAI)
           chunks = selectRelevantChunks(bookText, txt, MAX_BOOK_CONTEXT_CHUNKS);
@@ -3995,20 +4100,13 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
               <button style={{...bI,color:C.red}} onClick={()=>doDelete(selBook)}><Ico d={D.trash} sz={14}/></button>
             </div>
 
-            {selBook.summary && (
-              <div style={{padding:"12px 28px 0"}}>
-                <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:9,padding:"12px 18px",fontSize:15,color:C.inkD,lineHeight:1.78}}>
-                  <strong style={{fontSize:10,letterSpacing:"0.1em",textTransform:"uppercase",color:C.gold}}>Resumo</strong>
-                  <div style={{marginTop:6}}>{selBook.summary}</div>
-                </div>
-              </div>
-            )}
-
             <NotesPanel
               dirHandle={dirHandle}
               bookId={selBook.id}
               profileId={userName}
               otherProfiles={otherProfiles}
+              synopsis={selBook.synopsis}
+              synopsisStatus={selBook.synopsisStatus}
               onNotesPresenceChange={(hasNotes)=>updateBookNotesPresence(selBook.id,hasNotes)}
               onToast={pushToast}
             />
@@ -4038,7 +4136,7 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
               emptyNode={<WelcomeBook onSend={sendBook}/>}
               mode={chatMode}
               setMode={setChatMode}
-              deepDisabled={!bookHasPdf}
+              deepDisabled={!bookCanUseDeep}
             />
           </div>
         )}
