@@ -4379,9 +4379,16 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
       const concepts = await loadBookConcepts(dirHandle, b.id);
       hasConceptsMap[b.id] = concepts.length > 0;
     }));
-    const pending = books.filter(b =>
-      b.conceptsStatus !== "done" && !hasConceptsMap[b.id]
-    );
+
+    // Corrige status de livros que já têm arquivo mas status desatualizado
+    const statusFixNeeded = books.filter(b => b.conceptsStatus !== "done" && hasConceptsMap[b.id]);
+    if(statusFixNeeded.length > 0){
+      const nb = books.map(b => hasConceptsMap[b.id] ? {...b, conceptsStatus:"done"} : b);
+      setBooks(nb);
+      await persist(nb, cats, wishlist, profiles);
+    }
+
+    const pending = books.filter(b => !hasConceptsMap[b.id]);
 
     if(pending.length > 0){
       setConceptsLoading(false);
