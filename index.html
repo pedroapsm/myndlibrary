@@ -4566,6 +4566,9 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
   const saveCurrentChat=async(msgs)=>{
     if(!selBook || !msgs.length) return;
 
+    // Garante que o livro não mudou durante operação assíncrona
+    if(selBookRef.current?.id !== selBook.id) return;
+
     const firstUser=msgs.find(m=>m.role==="user");
     const title=firstUser ? firstUser.content.slice(0,50) : "Conversa";
     const date=new Date().toLocaleDateString("pt-BR");
