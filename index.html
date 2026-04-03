@@ -2628,8 +2628,9 @@ function ChatArea({messages,loading,onSend,placeholder,emptyNode,onExport,mode,s
 
 // ─── ChatHistory ──────────────────────────────────────
 
-function ChatHistory({sessions,otherSessions,activeId,onSelect,onNew,otherProfileNames=[], title="Conversas anteriores"}){
+function ChatHistory({sessions,otherSessions,activeId,onSelect,onNew,onDelete,otherProfileNames=[], title="Conversas anteriores"}){
   const [tab,setTab]=useState("mine");
+  const [hoveredId,setHoveredId]=useState(null);
   const allOther=Object.entries(otherSessions || {}).flatMap(([p,ss])=>ss.map(s=>({...s,_profile:p})));
   const hasOther=allOther.length>0;
   const otherTabLabel=otherProfileNames.length===1 ? otherProfileNames[0] : "Outros perfis";
@@ -2640,33 +2641,62 @@ function ChatHistory({sessions,otherSessions,activeId,onSelect,onNew,otherProfil
 
   if(!sessions.length && !hasOther) return null;
 
-  const renderSession=(s,showProfile=false)=>(
-    <button
-      key={`${s.id}_${showProfile?s._profile||"":""}`}
-      onClick={()=>onSelect(s)}
-      style={{
-        textAlign:"left",
-        padding:"6px 10px",
-        borderRadius:6,
-        border:`1px solid ${s.id===activeId?C.accentBrd:"transparent"}`,
-        background:s.id===activeId?C.accentBg:"none",
-        cursor:"pointer",
-        color:s.id===activeId?C.accent:C.inkD,
-        fontSize:13,
-        display:"flex",
-        alignItems:"center",
-        gap:7,
-        width:"100%"
-      }}
-    >
-      <Ico d={D.chat} sz={12} col={s.id===activeId?C.accent:C.inkF}/>
-      <span style={{flex:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
-        {s.title || "Sem título"}
-      </span>
-      {showProfile && <span style={{fontSize:10,color:C.gold,flexShrink:0,fontStyle:"italic"}}>{s._profile}</span>}
-      <span style={{fontSize:10,color:C.inkF,flexShrink:0}}>{s.date}</span>
-    </button>
-  );
+  const renderSession=(s,showProfile=false)=>{
+    const isActive = s.id===activeId;
+    const isHovered = hoveredId===s.id;
+    const canDelete = !s._profile && onDelete;
+
+    return(
+      <div
+        key={`${s.id}_${showProfile?s._profile||"":""}`}
+        style={{position:"relative",display:"flex",alignItems:"center"}}
+        onMouseEnter={()=>setHoveredId(s.id)}
+        onMouseLeave={()=>setHoveredId(null)}
+      >
+        <button
+          onClick={()=>onSelect(s)}
+          style={{
+            flex:1,
+            textAlign:"left",
+            padding:"7px 10px",
+            paddingRight: canDelete ? 28 : 10,
+            borderRadius:6,
+            border:`1px solid ${isActive ? C.accentBrd : isHovered ? C.border : "transparent"}`,
+            background: isActive ? C.accentBg : isHovered ? C.card : "none",
+            cursor:"pointer",
+            width:"100%",
+            transition:"background .12s, border-color .12s"
+          }}
+        >
+          <div style={{display:"flex",alignItems:"center",gap:6,minWidth:0}}>
+            <Ico d={D.chat} sz={11} col={isActive?C.accent:C.inkF}/>
+            <span style={{flex:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",fontSize:13,color:isActive?C.accent:C.inkD,fontWeight:isActive?600:400}}>
+              {s.title || "Sem título"}
+            </span>
+            {showProfile && <span style={{fontSize:10,color:C.gold,flexShrink:0,fontStyle:"italic"}}>{s._profile}</span>}
+          </div>
+          <div style={{fontSize:10,color:C.inkF,marginTop:2,paddingLeft:17}}>{s.date}</div>
+        </button>
+
+        {canDelete && isHovered && (
+          <button
+            onClick={e=>{ e.stopPropagation(); onDelete(s.id); }}
+            style={{
+              position:"absolute",right:4,
+              background:"none",border:"none",cursor:"pointer",
+              color:C.inkF,display:"flex",alignItems:"center",padding:4,borderRadius:4,
+              transition:"color .12s"
+            }}
+            onMouseEnter={e=>e.currentTarget.style.color=C.red}
+            onMouseLeave={e=>e.currentTarget.style.color=C.inkF}
+            title="Excluir conversa"
+          >
+            <Ico d={D.trash} sz={11} col="currentColor"/>
+          </button>
+        )}
+      </div>
+    );
+  };
 
   return(
     <div style={{padding:"10px 28px 0",borderTop:`1px solid ${C.border}`}}>
@@ -2680,16 +2710,11 @@ function ChatHistory({sessions,otherSessions,activeId,onSelect,onNew,otherProfil
                   key={t}
                   onClick={()=>setTab(t)}
                   style={{
-                    fontSize:11,
-                    padding:"2px 8px",
-                    borderRadius:4,
+                    fontSize:11,padding:"2px 8px",borderRadius:4,
                     border:`1px solid ${tab===t?C.accentBrd:C.border}`,
                     background:tab===t?C.accentBg:"none",
-                    cursor:"pointer",
-                    color:tab===t?C.accent:C.inkF,
-                    letterSpacing:"0.1em",
-                    textTransform:"uppercase",
-                    fontWeight:600
+                    cursor:"pointer",color:tab===t?C.accent:C.inkF,
+                    letterSpacing:"0.1em",textTransform:"uppercase",fontWeight:600
                   }}
                 >
                   {label}
@@ -2706,7 +2731,7 @@ function ChatHistory({sessions,otherSessions,activeId,onSelect,onNew,otherProfil
         </button>
       </div>
 
-      <div className="inner-scroll" style={{display:"flex",flexDirection:"column",gap:3,maxHeight:120,overflowY:"auto"}}>
+      <div className="inner-scroll" style={{display:"flex",flexDirection:"column",gap:1,maxHeight:140,overflowY:"auto"}}>
         {tab==="mine" && sessions.map(s=>renderSession(s,false))}
         {tab==="other" && (
           allOther.length===0
@@ -4511,6 +4536,28 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
     setActiveChatId(null);
   };
 
+  const deleteChat=async(sessionId)=>{
+    const next = chatSessions.filter(s=>s.id!==sessionId);
+    setChatSessions(next);
+    await saveChats(dirHandle,selBook.id,userName,next);
+    if(activeChatId===sessionId){
+      setBookMsgs([]);
+      setActiveChatId(null);
+      localStorage.removeItem(`mynd_lastChat_${selBook.id}`);
+    }
+  };
+
+  const deleteGlobalChat=async(sessionId)=>{
+    const next = globalSessions.filter(s=>s.id!==sessionId);
+    setGlobalSessions(next);
+    await saveGlobalChats(dirHandle,userName,next);
+    if(activeGlobalChatId===sessionId){
+      setGlobalMsgs([]);
+      setActiveGlobalChatId(null);
+      localStorage.removeItem("mynd_lastGlobalChat");
+    }
+  };
+
   const selectChat=s=>{
     setBookMsgs(s.messages);
     if(!s._profile){
@@ -5318,6 +5365,7 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
               activeId={activeChatId}
               onSelect={selectChat}
               onNew={newChat}
+              onDelete={deleteChat}
               otherProfileNames={otherProfiles}
               title="Conversas anteriores"
             />
@@ -5383,6 +5431,7 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
               activeId={activeGlobalChatId}
               onSelect={selectGlobalChat}
               onNew={newGlobalChat}
+              onDelete={deleteGlobalChat}
               otherProfileNames={otherProfiles}
               title="Pesquisas anteriores"
             />
