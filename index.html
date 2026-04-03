@@ -947,24 +947,36 @@ async function extractPdf(file){
 // ─── Claude ───────────────────────────────────────────
 
 async function callClaude(apiKey,system,messages,maxTok=1200){
-  const r=await fetch("https://api.anthropic.com/v1/messages",{
-    method:"POST",
-    headers:{
-      "Content-Type":"application/json",
-      "x-api-key":apiKey,
-      "anthropic-version":"2023-06-01",
-      "anthropic-dangerous-direct-browser-access":"true"
-    },
-    body:JSON.stringify({
-      model:"claude-3-5-haiku-20241022",
-      max_tokens:maxTok,
-      system,
-      messages:messages.map(m=>({ role:m.role, content:m.content }))
-    })
-  });
+  let r;
+  try{
+    r=await fetch("https://api.anthropic.com/v1/messages",{
+      method:"POST",
+      headers:{
+        "Content-Type":"application/json",
+        "x-api-key":apiKey,
+        "anthropic-version":"2023-06-01",
+        "anthropic-dangerous-direct-browser-access":"true"
+      },
+      body:JSON.stringify({
+        model:"claude-3-5-haiku-20241022",
+        max_tokens:maxTok,
+        system,
+        messages:messages.map(m=>({ role:m.role, content:m.content }))
+      })
+    });
+  }catch(fetchErr){
+    throw new Error("Sem conexão com a API. Verifique sua internet ou se há saldo disponível na sua conta Anthropic.");
+  }
   if(!r.ok){
     const e=await r.json().catch(()=>({}));
-    throw new Error(e?.error?.message || `HTTP ${r.status}`);
+    const msg = e?.error?.message || "";
+    if(r.status===401) throw new Error("Chave de API inválida. Verifique sua chave Anthropic nas configurações.");
+    if(r.status===403) throw new Error("Acesso negado. Verifique se sua chave Anthropic tem permissão para usar este modelo.");
+    if(r.status===429) throw new Error("Limite de requisições atingido. Aguarde alguns segundos e tente novamente.");
+    if(r.status===529 || msg.toLowerCase().includes("credit") || msg.toLowerCase().includes("billing")){
+      throw new Error("Saldo insuficiente na conta Anthropic. Adicione créditos em console.anthropic.com/settings/billing.");
+    }
+    throw new Error(msg || `Erro na API (HTTP ${r.status}). Tente novamente.`);
   }
   return (await r.json()).content?.[0]?.text || "Sem resposta.";
 }
