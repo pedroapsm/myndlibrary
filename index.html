@@ -3558,7 +3558,11 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
       return next;
     });
 
-    if(selBook?.id===book.id){
+    // Se o livro deletado é o que está aberto ou o último lido, limpa tudo
+    const isCurrentBook = screen === "book" && selBook?.id === book.id;
+    const isLastBook = lastBook?.id === book.id;
+
+    if(isCurrentBook){
       setSelBook(null);
       setBookText("");
       setBookEmbeddings(null);
@@ -3566,10 +3570,11 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
       setChatSessions([]);
       setOtherSessions({});
       setActiveChatId(null);
+      setGeneratingEmbeddings(false);
       setScreen("home");
     }
 
-    if(lastBook?.id===book.id){
+    if(isCurrentBook || isLastBook){
       setLastBook(null);
       localStorage.removeItem("mynd_lastBook");
     }
