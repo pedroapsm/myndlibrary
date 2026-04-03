@@ -3556,6 +3556,10 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
     const targetBook = editBookRef.current || selBookRef.current;
     if(!targetBook) return;
 
+    // Fecha o modal imediatamente — não depende de async
+    setModal(null);
+    setEditBook(null);
+
     const normalizedCategory = normalizeCategory(fd.category);
     const nextCats = normalizedCategory && !cats.includes(normalizedCategory)
       ? [...cats, normalizedCategory]
@@ -3566,20 +3570,17 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
     const finalCategory = nextCats.includes(normalizedCategory) ? normalizedCategory : "";
     const nextTags = normalizeTags(fd.tags);
 
-    let nb;
-    setBooks(prev => {
-      nb = prev.map(b => b.id===targetBook.id ? {...b,...fd,category:finalCategory,tags:nextTags} : b);
-      return nb;
-    });
-    await new Promise(r => setTimeout(r, 0));
+    const nb = books.map(b => b.id===targetBook.id
+      ? {...b,...fd, category:finalCategory, tags:nextTags}
+      : b
+    );
+    setBooks(nb);
 
-    if(selBookRef.current?.id===targetBook.id){
-      setSelBook(p=>({...p,...fd,category:finalCategory,tags:nextTags}));
+    if(selBookRef.current?.id === targetBook.id){
+      setSelBook(p => ({...p,...fd, category:finalCategory, tags:nextTags}));
     }
 
-    await persist(nb,nextCats,wishlist,profiles);
-    setModal(null);
-    setEditBook(null);
+    await persist(nb, nextCats, wishlist, profiles);
     pushToast("Livro atualizado");
   };
 
