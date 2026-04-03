@@ -1397,7 +1397,7 @@ async function fetchBookSynopsis(apiKey, title, author){
   const query = author ? `${title} — ${author}` : title;
   const r = await callClaude(
     apiKey,
-    `Você é um assistente literário. Baseado no seu conhecimento geral, escreva uma sinopse concisa do livro em português (4 a 6 frases): do que trata, contexto, para quem é indicado e por que vale a pena ler. Comece OBRIGATORIAMENTE com o formato: "{Título}, de {Autor}, ..." — por exemplo: "War, de Bob Woodward, é um livro que...". Seja direto. Não use markdown, não use títulos, não use negrito, não use #, não use * ou **. Texto corrido simples. Não repita o título em formato diferente ao longo do texto.`,
+    `Você é um assistente literário. Baseado no seu conhecimento geral, escreva uma sinopse concisa do livro em português (3 frases no máximo): do que trata e para quem é indicado. Comece OBRIGATORIAMENTE com o formato: "{Título}, de {Autor}, ..." — por exemplo: "War, de Bob Woodward, é um livro que...". Seja direto e breve. Não use markdown, não use títulos, não use negrito, não use #, não use * ou **. Texto corrido simples. Não repita o título em formato diferente ao longo do texto.`,
     [{ role:"user", content:`Livro: ${query}` }],
     400
   );
@@ -2335,7 +2335,40 @@ function NotesPanel({dirHandle,bookId,profileId,otherProfiles,synopsis,synopsisS
   return(
     <div style={{padding:"10px 28px 8px", display:"flex", gap:16, alignItems:"stretch"}}>
 
-      {/* ── Lado esquerdo: Notas ── */}
+      {/* ── Lado esquerdo: Sinopse ── */}
+      <div style={{flex:1, minWidth:0, display:"flex", flexDirection:"column"}}>
+        <div style={{...lb, marginBottom:8, display:"flex", alignItems:"center", justifyContent:"space-between"}}>
+          <span style={{display:"flex", alignItems:"center", gap:5}}>
+            <Ico d={D.book} sz={11}/> Sinopse
+          </span>
+          {synopsis && synopsisStatus === "done" && onRegenerateSynopsis && (
+            <button
+              onClick={onRegenerateSynopsis}
+              title="Regenerar sinopse"
+              style={{background:"none", border:"none", cursor:"pointer", color:C.inkF, display:"flex", alignItems:"center", gap:3, fontSize:11, padding:0}}
+              onMouseEnter={e=>e.currentTarget.style.color=C.accent}
+              onMouseLeave={e=>e.currentTarget.style.color=C.inkF}
+            >
+              <Ico d={D.arrowUp} sz={11}/> Regenerar
+            </button>
+          )}
+        </div>
+        <div style={{background:C.card, border:`1px solid ${C.border}`, borderRadius:8, padding:"12px 14px", flex:1}}>
+          {synopsis ? (
+            <p style={{fontSize:13.5, color:C.inkD, lineHeight:1.75}}>{renderSynopsis(synopsis)}</p>
+          ) : synopsisStatus === "pending" || synopsisStatus === "processing" ? (
+            <p style={{fontSize:13, color:C.inkF, fontStyle:"italic", lineHeight:1.6}}>
+              {synopsisStatus === "processing" ? "Gerando sinopse…" : "Sinopse ainda não gerada."}
+            </p>
+          ) : synopsisStatus === "error" ? (
+            <p style={{fontSize:13, color:"#7a1e1e", fontStyle:"italic"}}>Erro ao gerar sinopse.</p>
+          ) : (
+            <p style={{fontSize:13, color:C.inkF, fontStyle:"italic"}}>Sinopse indisponível.</p>
+          )}
+        </div>
+      </div>
+
+      {/* ── Lado direito: Notas ── */}
       <div style={{flex:1, minWidth:0, display:"flex", flexDirection:"column"}}>
         {/* Header */}
         <div style={{display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:8, gap:8, flexWrap:"wrap"}}>
@@ -2397,42 +2430,6 @@ function NotesPanel({dirHandle,bookId,profileId,otherProfiles,synopsis,synopsisS
             </div>
           </div>
         )}
-      </div>
-
-      {/* ── Lado direito: Sinopse ── */}
-      <div style={{flex:1, minWidth:0, display:"flex", flexDirection:"column"}}>
-        <div style={{...lb, marginBottom:8, display:"flex", alignItems:"center", justifyContent:"space-between"}}>
-          <span style={{display:"flex", alignItems:"center", gap:5}}>
-            <Ico d={D.book} sz={11}/> Sinopse
-          </span>
-          {synopsis && synopsisStatus === "done" && onRegenerateSynopsis && (
-            <button
-              onClick={onRegenerateSynopsis}
-              title="Regenerar sinopse"
-              style={{background:"none", border:"none", cursor:"pointer", color:C.inkF, display:"flex", alignItems:"center", gap:3, fontSize:11, padding:0}}
-              onMouseEnter={e=>e.currentTarget.style.color=C.accent}
-              onMouseLeave={e=>e.currentTarget.style.color=C.inkF}
-            >
-              <Ico d={D.arrowUp} sz={11}/> Regenerar
-            </button>
-          )}
-        </div>
-        <div style={{
-          background:C.card, border:`1px solid ${C.border}`, borderRadius:8, padding:"12px 14px",
-          flex:1
-        }}>
-          {synopsis ? (
-            <p style={{fontSize:13.5, color:C.inkD, lineHeight:1.75}}>{renderSynopsis(synopsis)}</p>
-          ) : synopsisStatus === "pending" || synopsisStatus === "processing" ? (
-            <p style={{fontSize:13, color:C.inkF, fontStyle:"italic", lineHeight:1.6}}>
-              {synopsisStatus === "processing" ? "Gerando sinopse…" : "Sinopse ainda não gerada."}
-            </p>
-          ) : synopsisStatus === "error" ? (
-            <p style={{fontSize:13, color:"#7a1e1e", fontStyle:"italic"}}>Erro ao gerar sinopse.</p>
-          ) : (
-            <p style={{fontSize:13, color:C.inkF, fontStyle:"italic"}}>Sinopse indisponível.</p>
-          )}
-        </div>
       </div>
 
       {/* Modal de notas salvas */}
@@ -2807,7 +2804,9 @@ function InsightsSavedModal({ bookInsights, onClose, onRemove }){
 
   return(
     <div style={ov} onClick={e=>{ if(e.target===e.currentTarget) onClose(); }}>
-      <div style={{...mb, width:580, maxHeight:"80vh", display:"flex", flexDirection:"column"}}>
+      <div style={{...mb, width:720, maxHeight:"82vh", display:"flex", flexDirection:"column"}}>
+
+        {/* Header */}
         <div style={{display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:16}}>
           <div style={{fontSize:18, fontWeight:700, color:C.ink, display:"flex", alignItems:"center", gap:8}}>
             ♥ Insights salvos <span style={{fontSize:13, color:C.inkF, fontWeight:400}}>({bookInsights.length})</span>
@@ -2817,44 +2816,59 @@ function InsightsSavedModal({ bookInsights, onClose, onRemove }){
 
         {bookInsights.length === 0 ? (
           <p style={{fontSize:14, color:C.inkF, fontStyle:"italic"}}>Nenhum insight salvo ainda.</p>
+        ) : selected ? (
+          /* ── Detalhe do insight selecionado ── */
+          <div style={{display:"flex", flexDirection:"column", flex:1, minHeight:0}}>
+            <button onClick={()=>setSelected(null)} style={{...bG, marginBottom:14, display:"flex", alignItems:"center", gap:6, fontSize:13, alignSelf:"flex-start"}}>
+              <Ico d={D.back} sz={13}/> Voltar
+            </button>
+            <div style={{display:"flex", alignItems:"flex-start", justifyContent:"space-between", marginBottom:10, gap:10}}>
+              <div style={{fontSize:16, fontWeight:700, color:C.ink}}>{selected.insightName||"Sem nome"}</div>
+              <button onClick={()=>{ onRemove(selected.id); setSelected(null); }} style={{...bI, padding:"4px 8px", color:C.red, borderColor:C.red+"44", flexShrink:0}}>
+                <Ico d={D.trash} sz={13}/>
+              </button>
+            </div>
+            <div style={{fontSize:11, color:C.inkF, marginBottom:14}}>{selected.profileId} · {new Date(selected.savedAt).toLocaleDateString("pt-BR")}</div>
+            <div className="inner-scroll" style={{overflowY:"auto", flex:1, background:C.bg, border:`1px solid ${C.border}`, borderRadius:8, padding:"14px 16px"}}>
+              <MarkdownText text={selected.answerText}/>
+            </div>
+          </div>
         ) : (
-          <div style={{display:"flex", gap:12, flex:1, overflow:"hidden", minHeight:0}}>
-            <div className="inner-scroll" style={{width:220, minWidth:220, overflowY:"auto", display:"flex", flexDirection:"column", gap:4}}>
+          /* ── Tabela de insights ── */
+          <div style={{display:"flex", flexDirection:"column", flex:1, minHeight:0}}>
+            {/* Cabeçalho da tabela */}
+            <div style={{display:"grid", gridTemplateColumns:"1fr 100px 100px 32px", gap:8, padding:"0 8px 8px", borderBottom:`1px solid ${C.border}`}}>
+              <div style={{...lb, fontSize:10}}>Insight</div>
+              <div style={{...lb, fontSize:10}}>Criado por</div>
+              <div style={{...lb, fontSize:10}}>Data</div>
+              <div/>
+            </div>
+            <div className="inner-scroll" style={{overflowY:"auto", flex:1, marginTop:4}}>
               {bookInsights.map(ins=>(
-                <button
+                <div
                   key={ins.id}
                   onClick={()=>setSelected(ins)}
-                  style={{
-                    textAlign:"left", padding:"8px 10px", borderRadius:7, flexShrink:0,
-                    border:`1px solid ${selected?.id===ins.id ? C.accentBrd : C.border}`,
-                    background:selected?.id===ins.id ? C.accentBg : C.card,
-                    cursor:"pointer"
-                  }}
+                  style={{display:"grid", gridTemplateColumns:"1fr 100px 100px 32px", gap:8, padding:"10px 8px", borderRadius:7, cursor:"pointer", alignItems:"center", transition:"background .12s"}}
+                  onMouseEnter={e=>e.currentTarget.style.background=C.card}
+                  onMouseLeave={e=>e.currentTarget.style.background="none"}
                 >
-                  <div style={{fontSize:12, fontWeight:600, color:selected?.id===ins.id ? C.accent : C.inkD, marginBottom:3, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap"}}>
-                    {ins.insightName || "Sem nome"}
+                  <div style={{minWidth:0}}>
+                    <div style={{fontSize:13, fontWeight:600, color:C.inkD, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap"}}>{ins.insightName||"Sem nome"}</div>
+                    <div style={{fontSize:11, color:C.inkF, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", marginTop:2}}>{ins.answerText?.slice(0,80)}…</div>
                   </div>
-                  <div style={{fontSize:11, color:C.inkF}}>{ins.profileId} · {new Date(ins.savedAt).toLocaleDateString("pt-BR")}</div>
-                </button>
-              ))}
-            </div>
-            <div className="inner-scroll" style={{flex:1, overflowY:"auto"}}>
-              {selected ? (
-                <div style={{background:C.bg, border:`1px solid ${C.border}`, borderRadius:9, padding:"14px 16px"}}>
-                  <div style={{display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:10}}>
-                    <div style={{fontSize:13, fontWeight:700, color:C.ink}}>{selected.insightName || "Sem nome"}</div>
-                    <div style={{display:"flex", gap:6}}>
-                      <button onClick={()=>{ onRemove(selected.id); setSelected(null); }} style={{...bI, padding:"4px 8px", color:C.red, borderColor:C.red+"44"}}>
-                        <Ico d={D.trash} sz={12}/>
-                      </button>
-                    </div>
-                  </div>
-                  <p style={{fontSize:13, color:C.inkD, lineHeight:1.7, whiteSpace:"pre-wrap"}}>{selected.answerText}</p>
-                  <div style={{fontSize:11, color:C.inkF, marginTop:10}}>{selected.profileId} · {new Date(selected.savedAt).toLocaleDateString("pt-BR")}</div>
+                  <div style={{fontSize:12, color:C.inkF}}>{ins.profileId}</div>
+                  <div style={{fontSize:12, color:C.inkF}}>{new Date(ins.savedAt).toLocaleDateString("pt-BR")}</div>
+                  <button
+                    onClick={e=>{ e.stopPropagation(); onRemove(ins.id); }}
+                    style={{background:"none", border:"none", cursor:"pointer", color:C.inkF, display:"flex", alignItems:"center", justifyContent:"center", padding:4, borderRadius:4}}
+                    onMouseEnter={e=>{ e.stopPropagation(); e.currentTarget.style.color=C.red; }}
+                    onMouseLeave={e=>{ e.currentTarget.style.color=C.inkF; }}
+                    title="Remover insight"
+                  >
+                    <Ico d={D.trash} sz={13} col="currentColor"/>
+                  </button>
                 </div>
-              ) : (
-                <p style={{fontSize:13, color:C.inkF, fontStyle:"italic", padding:"8px 0"}}>Selecione um insight para ver o conteúdo.</p>
-              )}
+              ))}
             </div>
           </div>
         )}
