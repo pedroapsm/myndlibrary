@@ -3291,7 +3291,7 @@ function Sidebar({
       <div style={{padding:"10px 10px 8px",borderBottom:`1px solid ${C.sbBorder}`,flexShrink:0}}>
         {[
           {id:"home",label:"Página inicial",icon:D.home,fn:()=>setScreen("home")},
-          {id:"global",label:"Pesquisar na biblioteca",icon:D.globe,fn:openGlobal},
+          {id:"global",label:"Pesquisa geral",icon:D.globe,fn:openGlobal},
           {id:"connections",label:"Conexões",icon:D.link,fn:openConnections},
         ].map(({id,label,icon,fn})=>(
           <button
@@ -3860,9 +3860,9 @@ const BOOK_SUGGESTIONS = [
 
 function WelcomeBook({onSend}){
   return(
-    <div style={{background:C.surf,border:`1px solid ${C.border}`,borderRadius:10,padding:"20px 24px"}}>
-      <div style={{fontSize:20,fontWeight:700,color:C.accent,marginBottom:8}}>📖 Converse com este livro</div>
-      <p style={{fontSize:15,color:C.inkD,lineHeight:1.7}}>
+    <div style={{background:C.surf,border:`1px solid ${C.border}`,borderRadius:10,padding:"14px 18px"}}>
+      <div style={{fontSize:14,fontWeight:700,color:C.accent,marginBottom:4}}>📖 Converse com este livro</div>
+      <p style={{fontSize:13,color:C.inkD,lineHeight:1.6}}>
         As respostas são baseadas exclusivamente no texto do livro.
       </p>
       <SuggestionChips items={BOOK_SUGGESTIONS} onSelect={onSend} variant="global" />
@@ -3916,6 +3916,8 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
   const [chatMode,setChatMode] = useState("auto");
   const [bookCanUseDeep,setBookCanUseDeep] = useState(false);
   const [globalChatMode,setGlobalChatMode] = useState("auto");
+  const [globalSearchMode,setGlobalSearchMode] = useState("all"); // "all" | "category"
+  const [globalSearchCategory,setGlobalSearchCategory] = useState("");
 
   const [searchQ,setSearchQ] = useState("");
   const [searchDraft,setSearchDraft] = useState("");
@@ -5014,6 +5016,11 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
     setChatLoading(true);
     setGlobalAutoDecision(null);
 
+    // Filtra livros por categoria se necessário
+    const activeBooks = globalSearchMode === "category" && globalSearchCategory
+      ? books.filter(b => b.category === globalSearchCategory)
+      : books;
+
     try{
       let r;
       const hasGlobalEmbeddings = globalEmbeddings && Object.keys(globalEmbeddings).length > 0;
@@ -5060,7 +5067,7 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
       if(queryEmbedding && hasGlobalEmbeddings){
         // Seleção semântica — usa embeddings já carregados
         const semanticResults = selectRelevantBooksSemantic(
-          queryEmbedding, books, globalEmbeddings, globalTexts, MAX_GLOBAL_BOOKS
+          queryEmbedding, activeBooks, globalEmbeddings, globalTexts, MAX_GLOBAL_BOOKS
         );
         candidateEntries = semanticResults
           .filter(r => r.score > 0 || r.scoredChunks.length > 0)
@@ -5074,7 +5081,7 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
 
         // Fallback se semântica não retornar nada
         if(!candidateEntries.length){
-          const fallbackBooks = selectRelevantBooks(txt, books, globalTexts, MAX_GLOBAL_BOOKS);
+          const fallbackBooks = selectRelevantBooks(txt, activeBooks, globalTexts, MAX_GLOBAL_BOOKS);
           candidateEntries = fallbackBooks.map(book=>({
             book,
             chunks: selectRelevantChunks(globalTexts[book.id] || "", txt, MAX_GLOBAL_CHUNKS_PER_BOOK)
@@ -5082,7 +5089,7 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
         }
       }else{
         // Fallback keywords
-        const candidateBooks = selectRelevantBooks(txt, books, globalTexts, MAX_GLOBAL_BOOKS);
+        const candidateBooks = selectRelevantBooks(txt, activeBooks, globalTexts, MAX_GLOBAL_BOOKS);
         candidateEntries = candidateBooks.map(book=>({
           book,
           chunks: selectRelevantChunks(globalTexts[book.id] || "", txt, MAX_GLOBAL_CHUNKS_PER_BOOK)
@@ -5394,31 +5401,59 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
               <button style={bI} onClick={()=>setScreen("home")}><Ico d={D.back} sz={15}/></button>
               <div style={{flex:1}}>
                 <div style={{fontSize:21,fontWeight:700,color:C.ink,display:"flex",alignItems:"center",gap:8}}>
-                  <Ico d={D.globe} sz={19} col={C.accent}/> Pesquisa na biblioteca
+                  <Ico d={D.globe} sz={19} col={C.accent}/> Pesquisa geral
                 </div>
                 <div style={{display:"flex",flexWrap:"wrap",gap:8,rowGap:4,marginTop:6,alignItems:"center"}}>
-                  <span style={{fontSize:13,color:C.inkF}}>
-                    {books.length} livros {globalLoading ? "| carregando…" : globalTexts ? "| pronto" : ""}
-                  </span>
-                  <span style={{fontSize:12,color:C.inkF}}>•</span>
-                  {(()=>{
-                    let label;
-                    if(globalAutoDecision){
-                      const sub = globalAutoDecision.mode === "deep" ? "Profundo" : "Básico";
-                      label = `Modo: Automático - ${sub}`;
-                    } else if(globalChatMode === "auto"){
-                      label = "Modo: Automático";
-                    } else if(globalChatMode === "deep"){
-                      label = "Modo: Profundo";
-                    } else {
-                      label = "Modo: Básico";
+                  {/* Toggle Geral / Por categoria */}
+                  <div style={{display:"flex",gap:4}}>
+                    {["all","category"].map(mode=>(
+                      <button
+                        key={mode}
+                        onClick={()=>{ setGlobalSearchMode(mode); if(mode==="all") setGlobalSearchCategory(""); }}
+                        style={{
+                          fontSize:11,padding:"2px 10px",borderRadius:6,cursor:"pointer",fontWeight:600,
+                          border:`1px solid ${globalSearchMode===mode ? C.accentBrd : C.border}`,
+                          background:globalSearchMode===mode ? C.accentBg : "none",
+                          color:globalSearchMode===mode ? C.accent : C.inkF
+                        }}
+                      >
+                        {mode==="all" ? "Geral" : "Por categoria"}
+                      </button>
+                    ))}
+                  </div>
+
+                  {/* Select de categoria */}
+                  {globalSearchMode==="category" && (
+                    <select
+                      value={globalSearchCategory}
+                      onChange={e=>setGlobalSearchCategory(e.target.value)}
+                      style={{fontSize:12,padding:"2px 8px",borderRadius:6,border:`1px solid ${C.border}`,background:C.surf,color:C.ink,cursor:"pointer",outline:"none"}}
+                    >
+                      <option value="">Escolha uma categoria…</option>
+                      {cats.filter(c => books.some(b=>b.category===c)).map(c=>(
+                        <option key={c} value={c}>{c}</option>
+                      ))}
+                    </select>
+                  )}
+
+                  {/* Info de livros no escopo */}
+                  <span style={{fontSize:12,color:C.inkF}}>
+                    {globalSearchMode==="category" && globalSearchCategory
+                      ? `${books.filter(b=>b.category===globalSearchCategory).length} livros em "${globalSearchCategory}"`
+                      : `${books.length} livros`
                     }
-                    return (
-                      <span style={{fontSize:11,padding:"2px 8px",borderRadius:10,fontWeight:600,background:C.accentBg,color:C.accent,border:`1px solid ${C.accentBrd}`}}>
-                        {label}
-                      </span>
-                    );
-                  })()}
+                    {globalLoading ? " · carregando…" : globalTexts ? " · pronto" : ""}
+                  </span>
+
+                  <span style={{fontSize:12,color:C.inkF}}>•</span>
+                  <span style={{fontSize:11,padding:"2px 8px",borderRadius:10,fontWeight:600,background:C.accentBg,color:C.accent,border:`1px solid ${C.accentBrd}`}}>
+                    {globalAutoDecision
+                      ? `Modo: Automático - ${globalAutoDecision.mode === "deep" ? "Profundo" : "Básico"}`
+                      : globalChatMode === "deep" ? "Modo: Profundo"
+                      : globalChatMode === "auto" ? "Modo: Automático"
+                      : "Modo: Básico"
+                    }
+                  </span>
                 </div>
               </div>
             </div>
@@ -5444,7 +5479,7 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
               messages={globalMsgs}
               loading={chatLoading || globalLoading}
               onSend={globalTexts ? sendGlobal : ()=>{}}
-              placeholder={globalLoading ? "Carregando livros…" : "Pergunte sobre qualquer livro da biblioteca…"}
+              placeholder={globalLoading ? "Carregando livros…" : globalSearchMode==="category" && globalSearchCategory ? `Pergunte sobre livros de "${globalSearchCategory}"…` : "Pergunte sobre qualquer livro da biblioteca…"}
               onExport={()=>exportChat(globalMsgs,"pesquisa_global")}
               emptyNode={<WelcomeGlobal/>}
               mode={globalChatMode}
