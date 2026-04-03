@@ -1516,7 +1516,6 @@ const sbLb = {
 function BookProcessingStatus({ book, onRetry }){
   const items = [
     { key:"synopsisStatus",   label:"Sinopse" },
-    { key:"embeddingsStatus", label:"Índice semântico" },
     { key:"conceptsStatus",   label:"Conceitos" },
   ];
   const relevant = items.filter(it => book[it.key] === "processing" || book[it.key] === "error");
@@ -5122,6 +5121,7 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
         const synopsis = sanitizeSynopsisText(await fetchBookSynopsis(apiKey, book.title, book.author));
         setBooks(prev=>{ const nb=prev.map(b=>b.id===book.id?{...b,synopsis,synopsisStatus:"done"}:b); persist(nb,cats,wishlist,profiles); return nb; });
         setSelBook(p=>p?{...p,synopsis,synopsisStatus:"done"}:p);
+        pushToast("Sinopse regenerada");
       }catch(e){
         updateStatus("error");
       }
