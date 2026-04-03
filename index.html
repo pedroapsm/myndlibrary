@@ -792,7 +792,58 @@ async function rebuildConceptsIndex(dirHandle, books, apiKey, existingIndex={}){
   return newIndex;
 }
 
-// ─── Auto Mode Logic ──────────────────────────────────
+// ─── Insights ─────────────────────────────────────────
+
+const insightsFileName = (profileId) =>
+  `${safeProfileKey(profileId)}_insights.json`;
+
+const insightsEmbeddingsFileName = (profileId) =>
+  `${safeProfileKey(profileId)}_insights_embeddings.json`;
+
+async function loadInsights(dirHandle, profileId){
+  const txt = await rf(dirHandle, insightsFileName(profileId));
+  if(!txt) return [];
+  try{ return JSON.parse(txt); }catch{ return []; }
+}
+
+async function saveInsights(dirHandle, profileId, insights){
+  await wf(dirHandle, insightsFileName(profileId), JSON.stringify(insights, null, 2));
+}
+
+async function loadInsightEmbeddings(dirHandle, profileId){
+  const txt = await rf(dirHandle, insightsEmbeddingsFileName(profileId));
+  if(!txt) return {};
+  try{ return JSON.parse(txt); }catch{ return {}; }
+}
+
+async function saveInsightEmbeddings(dirHandle, profileId, embeddings){
+  await wf(dirHandle, insightsEmbeddingsFileName(profileId), JSON.stringify(embeddings));
+}
+
+// Busca textual base — filtra por includes em campos relevantes
+function searchInsightsText(insights=[], query=""){
+  const q = query.trim().toLocaleLowerCase("pt-BR");
+  if(!q) return insights;
+  return insights.filter(ins =>
+    (ins.answerText||"").toLocaleLowerCase("pt-BR").includes(q) ||
+    (ins.bookTitle||"").toLocaleLowerCase("pt-BR").includes(q) ||
+    (ins.bookAuthor||"").toLocaleLowerCase("pt-BR").includes(q) ||
+    (ins.bookCategory||"").toLocaleLowerCase("pt-BR").includes(q) ||
+    (ins.profileId||"").toLocaleLowerCase("pt-BR").includes(q)
+  );
+}
+
+// Reordena insights filtrados por relevância semântica
+function reorderInsightsBySemantic(filtered=[], embeddings={}, queryEmbedding){
+  if(!queryEmbedding || !filtered.length) return filtered;
+  return [...filtered]
+    .map(ins => ({
+      ins,
+      score: embeddings[ins.id] ? cosineSimilarity(queryEmbedding, embeddings[ins.id]) : 0
+    }))
+    .sort((a,b) => b.score - a.score)
+    .map(x => x.ins);
+}
 
 // Classifica a intenção da pergunta em 3 estados.
 // "global"    → exige visão ampla do livro (tese, síntese, comparação, evolução)
@@ -1465,7 +1516,8 @@ const D = {
   save:"M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2zM17 21v-8H7v8M7 3v5h8",
   arrowUp:"M12 19V5M6 11l6-6 6 6",
   arrowDown:"M12 5v14M6 13l6 6 6-6",
-  logoff:"M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"
+  logoff:"M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9",
+  insights:"M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"
 };
 
 // ─── Base styles ──────────────────────────────────────
@@ -2488,7 +2540,7 @@ function ModeToggle({mode, setMode, deepDisabled}){
   );
 }
 
-function ChatArea({messages,loading,onSend,placeholder,emptyNode,onExport,mode,setMode,deepDisabled}){
+function ChatArea({messages,loading,onSend,placeholder,emptyNode,onExport,mode,setMode,deepDisabled,onToggleInsight,savedMessageIds=new Set()}){
   const [input,setInput]=useState("");
   const endRef=useRef();
   const inputRef=useRef();
@@ -2547,20 +2599,40 @@ function ChatArea({messages,loading,onSend,placeholder,emptyNode,onExport,mode,s
               {m.role==="user" ? m.av : "✦"}
             </div>
 
-            <div
-              style={{
-                padding:"10px 14px",
-                borderRadius:8,
-                background:m.role==="user" ? "#eaf0fb" : C.card,
-                border:`1px solid ${m.role==="user"?C.accentBrd:C.border}`,
-                color:C.ink,
-                maxWidth:"100%"
-              }}
-            >
-              {m.role==="assistant"
-                ? <MarkdownText text={m.content}/>
-                : <span style={{fontSize:14,lineHeight:1.65}}>{m.content}</span>
-              }
+            <div style={{position:"relative",maxWidth:"100%"}}>
+              {/* Coração — só em mensagens do assistente com id */}
+              {m.role==="assistant" && m.id && onToggleInsight && (
+                <button
+                  onClick={()=>onToggleInsight(m)}
+                  title={savedMessageIds.has(m.id) ? "Remover insight" : "Salvar como insight"}
+                  style={{
+                    position:"absolute",top:6,right:6,
+                    background:"none",border:"none",cursor:"pointer",
+                    fontSize:14,lineHeight:1,padding:2,zIndex:1,
+                    color: savedMessageIds.has(m.id) ? "#e05c7a" : C.inkF,
+                    transition:"color .15s, transform .15s"
+                  }}
+                  onMouseEnter={e=>{ e.currentTarget.style.transform="scale(1.2)"; e.currentTarget.style.color="#e05c7a"; }}
+                  onMouseLeave={e=>{ e.currentTarget.style.transform="scale(1)"; e.currentTarget.style.color=savedMessageIds.has(m.id)?"#e05c7a":C.inkF; }}
+                >
+                  {savedMessageIds.has(m.id) ? "♥" : "♡"}
+                </button>
+              )}
+
+              <div
+                style={{
+                  padding:"10px 36px 10px 14px",
+                  borderRadius:8,
+                  background:m.role==="user" ? "#eaf0fb" : C.card,
+                  border:`1px solid ${m.role==="user"?C.accentBrd:C.border}`,
+                  color:C.ink,
+                }}
+              >
+                {m.role==="assistant"
+                  ? <MarkdownText text={m.content}/>
+                  : <span style={{fontSize:14,lineHeight:1.65}}>{m.content}</span>
+                }
+              </div>
             </div>
           </div>
         ))}
@@ -2623,6 +2695,49 @@ function ChatArea({messages,loading,onSend,placeholder,emptyNode,onExport,mode,s
         </div>
       </div>
     </>
+  );
+}
+
+// ─── BookInsights ─────────────────────────────────────
+
+function BookInsights({ bookId, insights, profiles, onRemove }){
+  const bookInsights = insights.filter(ins => ins.bookId === bookId);
+  if(!bookInsights.length) return null;
+
+  return(
+    <div style={{padding:"8px 28px 0", borderTop:`1px solid ${C.border}`}}>
+      <div style={{...lb, marginBottom:8, display:"flex", alignItems:"center", gap:5}}>
+        <span style={{fontSize:12}}>♥</span> Insights deste livro
+        <span style={{fontSize:10, color:C.inkF, fontWeight:400, marginLeft:2}}>({bookInsights.length})</span>
+      </div>
+      <div style={{display:"flex", flexDirection:"column", gap:6, maxHeight:160, overflowY:"auto"}} className="inner-scroll">
+        {bookInsights.map(ins=>(
+          <div key={ins.id} style={{background:C.card, border:`1px solid ${C.border}`, borderRadius:7, padding:"8px 12px", position:"relative"}}>
+            <div style={{fontSize:13, color:C.inkD, lineHeight:1.6, paddingRight:20,
+              overflow:"hidden", display:"-webkit-box", WebkitLineClamp:2, WebkitBoxOrient:"vertical"
+            }}>
+              {ins.answerText}
+            </div>
+            <div style={{display:"flex", alignItems:"center", gap:8, marginTop:4}}>
+              <span style={{fontSize:10, color:C.inkF}}>{ins.profileId}</span>
+              <span style={{fontSize:10, color:C.inkF}}>·</span>
+              <span style={{fontSize:10, color:C.inkF}}>{new Date(ins.savedAt).toLocaleDateString("pt-BR")}</span>
+            </div>
+            {onRemove && (
+              <button
+                onClick={()=>onRemove(ins.id)}
+                style={{position:"absolute", top:6, right:6, background:"none", border:"none", cursor:"pointer", color:C.inkF, padding:2, display:"flex"}}
+                onMouseEnter={e=>e.currentTarget.style.color=C.red}
+                onMouseLeave={e=>e.currentTarget.style.color=C.inkF}
+                title="Remover insight"
+              >
+                <Ico d={D.close} sz={11} col="currentColor"/>
+              </button>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
   );
 }
 
@@ -3293,6 +3408,7 @@ function Sidebar({
           {id:"home",label:"Página inicial",icon:D.home,fn:()=>setScreen("home")},
           {id:"global",label:"Pesquisa na biblioteca",icon:D.globe,fn:openGlobal},
           {id:"connections",label:"Conexões",icon:D.link,fn:openConnections},
+          {id:"insights",label:"Insights",icon:D.insights,fn:()=>setScreen("insights")},
         ].map(({id,label,icon,fn})=>(
           <button
             key={id}
@@ -3870,6 +3986,133 @@ function WelcomeBook({onSend}){
   );
 }
 
+// ─── InsightsPage ─────────────────────────────────────
+
+function InsightsPage({ insights, insightEmbeddings, openaiKey, cats, profiles }){
+  const [search, setSearch] = useState("");
+  const [filterCat, setFilterCat] = useState("");
+  const [filterProfile, setFilterProfile] = useState("");
+  const [searching, setSearching] = useState(false);
+  const [results, setResults] = useState(null); // null = sem busca ativa
+
+  const availableCats = useMemo(()=>[...new Set(insights.map(i=>i.bookCategory).filter(Boolean))],[insights]);
+  const availableProfiles = useMemo(()=>[...new Set(insights.map(i=>i.profileId).filter(Boolean))],[insights]);
+
+  // Filtra base por categoria e perfil
+  const baseFiltered = useMemo(()=>{
+    return insights.filter(ins=>{
+      if(filterCat && ins.bookCategory !== filterCat) return false;
+      if(filterProfile && ins.profileId !== filterProfile) return false;
+      return true;
+    });
+  },[insights, filterCat, filterProfile]);
+
+  const displayed = results !== null ? results : baseFiltered;
+
+  const doSearch = async()=>{
+    const q = search.trim();
+    if(!q){ setResults(null); return; }
+    setSearching(true);
+
+    // Busca textual base
+    const textFiltered = searchInsightsText(baseFiltered, q);
+
+    // Reordena semanticamente se tiver OpenAI key e embeddings
+    if(openaiKey && Object.keys(insightEmbeddings).length > 0){
+      try{
+        const qEmb = await generateEmbedding(q, openaiKey);
+        const reordered = reorderInsightsBySemantic(textFiltered, insightEmbeddings, qEmb);
+        setResults(reordered);
+      }catch{
+        setResults(textFiltered);
+      }
+    } else {
+      setResults(textFiltered);
+    }
+    setSearching(false);
+  };
+
+  return(
+    <div className="inner-scroll" style={{flex:1, overflowY:"auto", padding:"36px 40px"}}>
+      <div style={{display:"flex", alignItems:"flex-start", justifyContent:"space-between", marginBottom:24, gap:16, flexWrap:"wrap"}}>
+        <div>
+          <h1 style={{fontSize:32, fontWeight:700, color:C.ink, lineHeight:1}}>Insights</h1>
+          <p style={{fontSize:15, color:C.inkF, marginTop:8}}>
+            Respostas salvas da sua biblioteca. {insights.length} insight{insights.length!==1?"s":""} no total.
+          </p>
+        </div>
+      </div>
+
+      {/* Filtros + Busca */}
+      <div style={{display:"flex", gap:10, marginBottom:24, flexWrap:"wrap", alignItems:"center"}}>
+        {availableCats.length > 1 && (
+          <select
+            value={filterCat}
+            onChange={e=>{ setFilterCat(e.target.value); setResults(null); }}
+            style={{fontSize:13, padding:"6px 10px", borderRadius:7, border:`1px solid ${C.border}`, background:C.surf, color:C.ink, outline:"none", cursor:"pointer"}}
+          >
+            <option value="">Todas as categorias</option>
+            {availableCats.map(c=><option key={c} value={c}>{c}</option>)}
+          </select>
+        )}
+        {availableProfiles.length > 1 && (
+          <select
+            value={filterProfile}
+            onChange={e=>{ setFilterProfile(e.target.value); setResults(null); }}
+            style={{fontSize:13, padding:"6px 10px", borderRadius:7, border:`1px solid ${C.border}`, background:C.surf, color:C.ink, outline:"none", cursor:"pointer"}}
+          >
+            <option value="">Todos os perfis</option>
+            {availableProfiles.map(p=><option key={p} value={p}>{p}</option>)}
+          </select>
+        )}
+        <div style={{flex:1, minWidth:240, display:"flex", gap:8, alignItems:"center", background:C.surf, border:`1px solid ${C.border}`, borderRadius:8, padding:"6px 12px"}}>
+          <Ico d={D.search} sz={14} col={C.inkF}/>
+          <input
+            value={search}
+            onChange={e=>{ setSearch(e.target.value); if(!e.target.value.trim()) setResults(null); }}
+            onKeyDown={e=>{ if(e.key==="Enter") doSearch(); }}
+            placeholder="Buscar insights…"
+            style={{flex:1, background:"none", border:"none", outline:"none", color:C.ink, fontSize:14}}
+          />
+          {search && <button onClick={()=>{ setSearch(""); setResults(null); }} style={{background:"none",border:"none",cursor:"pointer",color:C.inkF,display:"flex"}}><Ico d={D.close} sz={12}/></button>}
+        </div>
+        <button
+          onClick={doSearch}
+          disabled={!search.trim() || searching}
+          style={{...bP(!search.trim()||searching), fontSize:13, padding:"6px 16px"}}
+        >
+          {searching ? "Buscando…" : "Buscar"}
+        </button>
+      </div>
+
+      {/* Lista */}
+      {insights.length === 0 ? (
+        <div style={{color:C.inkF, fontSize:14, fontStyle:"italic"}}>
+          Nenhum insight salvo ainda. Clique no ♡ em qualquer resposta da IA para salvar.
+        </div>
+      ) : displayed.length === 0 ? (
+        <div style={{color:C.inkF, fontSize:14, fontStyle:"italic"}}>Nenhum insight encontrado.</div>
+      ) : (
+        <div style={{display:"flex", flexDirection:"column", gap:12}}>
+          {displayed.map(ins=>(
+            <div key={ins.id} style={{background:C.surf, border:`1px solid ${C.border}`, borderRadius:10, padding:"16px 20px"}}>
+              <div style={{fontSize:14, color:C.inkD, lineHeight:1.75, marginBottom:10}}>
+                {ins.answerText}
+              </div>
+              <div style={{display:"flex", alignItems:"center", gap:10, flexWrap:"wrap"}}>
+                <span style={{fontSize:12, fontWeight:600, color:C.ink}}>{ins.bookTitle}</span>
+                {ins.bookAuthor && <span style={{fontSize:12, color:C.inkF}}>· {ins.bookAuthor}</span>}
+                {ins.bookCategory && (()=>{ const c=catStyle(ins.bookCategory); return <span style={{fontSize:11,padding:"2px 8px",borderRadius:10,background:c.bg,color:c.ink,border:`1px solid ${c.brd}`,fontWeight:600}}>{ins.bookCategory}</span>; })()}
+                <span style={{fontSize:11, color:C.inkF, marginLeft:"auto"}}>{ins.profileId} · {new Date(ins.savedAt).toLocaleDateString("pt-BR")}</span>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Library ──────────────────────────────────────────
 
 function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}){
@@ -3918,6 +4161,10 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
   const [globalChatMode,setGlobalChatMode] = useState("auto");
   const [globalSearchMode,setGlobalSearchMode] = useState("all"); // "all" | "category"
   const [globalSearchCategory,setGlobalSearchCategory] = useState("");
+
+  const [insights,setInsights] = useState([]);
+  const [insightEmbeddings,setInsightEmbeddings] = useState({});
+  const [insightsLoaded,setInsightsLoaded] = useState(false);
 
   const [searchQ,setSearchQ] = useState("");
   const [searchDraft,setSearchDraft] = useState("");
@@ -3985,6 +4232,13 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
       setWishlist(idx.wishlist || []);
       setProfiles(idx.profiles || []);
       setStats(st);
+
+      // Carrega insights do perfil atual
+      const ins = await loadInsights(dirHandle, initUser);
+      const insEmbs = await loadInsightEmbeddings(dirHandle, initUser);
+      setInsights(ins);
+      setInsightEmbeddings(insEmbs);
+      setInsightsLoaded(true);
 
       const lastId=localStorage.getItem("mynd_lastBook");
       if(lastId){
@@ -4303,10 +4557,14 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
   };
 
   const doDelete=async(book)=>{
-    if(!confirm(`Remover "${book.title}"?`)) return;
+    const bookInsightsCount = insights.filter(ins => ins.bookId === book.id).length;
+    const confirmMsg = bookInsightsCount > 0
+      ? `Remover "${book.title}"? Isso também removerá ${bookInsightsCount} insight${bookInsightsCount>1?"s":""} salvos relacionados a este livro.`
+      : `Remover "${book.title}"?`;
+    if(!confirm(confirmMsg)) return;
 
     await rmf(dirHandle,`${book.id}.txt`);
-    await rmf(dirHandle,embeddingsFileName(book.id)); // remove embeddings junto
+    await rmf(dirHandle,embeddingsFileName(book.id));
 
     const knownProfiles=Array.from(new Set([...(profiles||[]), userName].filter(Boolean)));
     for(const p of knownProfiles){
@@ -4338,6 +4596,27 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
       saveStats(dirHandle,next);
       return next;
     });
+
+    // Remove insights relacionados a este livro (todos os perfis)
+    const knownProfilesForInsights = Array.from(new Set([...(profiles||[]), userName].filter(Boolean)));
+    for(const p of knownProfilesForInsights){
+      const pInsights = await loadInsights(dirHandle, p);
+      const relatedIds = new Set(pInsights.filter(ins=>ins.bookId===book.id).map(ins=>ins.id));
+      if(relatedIds.size > 0){
+        const nextIns = pInsights.filter(ins=>ins.bookId!==book.id);
+        await saveInsights(dirHandle, p, nextIns);
+        // Remove embeddings relacionados
+        const pEmbs = await loadInsightEmbeddings(dirHandle, p);
+        let changed = false;
+        for(const id of relatedIds){ if(pEmbs[id]){ delete pEmbs[id]; changed=true; } }
+        if(changed) await saveInsightEmbeddings(dirHandle, p, pEmbs);
+        // Atualiza state se for o perfil atual
+        if(p === userName){
+          setInsights(nextIns);
+          if(changed) setInsightEmbeddings({...pEmbs});
+        }
+      }
+    }
 
     // Usa refs para garantir valores atuais (evita closure stale)
     const currentScreen  = screenRef.current;
@@ -4908,7 +5187,12 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
   };
 
   const av=userName ? userName.charAt(0).toUpperCase() : "?";
-  const mkM=(role,content)=>({role,content,av});
+  const mkM=(role,content)=>({
+    role,
+    content,
+    av,
+    id: role==="assistant" ? uid() : undefined
+  });
 
   const sendBook=async(txt)=>{
     if(!selBook) return;
@@ -5164,6 +5448,56 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
     }
   };
 
+  const toggleInsight=async(msg, book)=>{
+    if(!msg?.id || !book) return;
+    const existing = insights.find(ins => ins.messageId === msg.id);
+
+    if(existing){
+      // Remove insight
+      const next = insights.filter(ins => ins.messageId !== msg.id);
+      setInsights(next);
+      await saveInsights(dirHandle, userName, next);
+      // Remove embedding se existir
+      if(insightEmbeddings[existing.id]){
+        const nextEmbs = {...insightEmbeddings};
+        delete nextEmbs[existing.id];
+        setInsightEmbeddings(nextEmbs);
+        await saveInsightEmbeddings(dirHandle, userName, nextEmbs);
+      }
+      pushToast("Insight removido");
+    } else {
+      // Salva insight imediatamente
+      const insight = {
+        id: uid(),
+        profileId: userName,
+        savedAt: new Date().toISOString(),
+        bookId: book.id,
+        bookTitle: book.title,
+        bookCategory: book.category || "",
+        bookAuthor: book.author || "",
+        messageId: msg.id,
+        answerText: msg.content
+      };
+      const next = [insight, ...insights];
+      setInsights(next);
+      await saveInsights(dirHandle, userName, next);
+      pushToast("Insight salvo");
+
+      // Gera embedding em background se tiver OpenAI key
+      if(openaiKey){
+        generateEmbedding(msg.content, openaiKey)
+          .then(async emb => {
+            setInsightEmbeddings(prev => {
+              const next = {...prev, [insight.id]: emb};
+              saveInsightEmbeddings(dirHandle, userName, next);
+              return next;
+            });
+          })
+          .catch(e => console.warn("Embedding do insight falhou:", e.message));
+      }
+    }
+  };
+
   const handleLogoff=async()=>{
     if(!confirm("Trocar de perfil? Suas chaves e pasta permanecem salvas.")) return;
     localStorage.removeItem("mynd_user");
@@ -5364,6 +5698,16 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
               onRegenerateSynopsis={()=>handleRetry("synopsisStatus")}
             />
 
+            <BookInsights
+              bookId={selBook.id}
+              insights={insights}
+              profiles={[userName,...otherProfiles]}
+              onRemove={(insightId)=>{
+                const ins = insights.find(i=>i.id===insightId);
+                if(ins) toggleInsight({id:ins.messageId, content:ins.answerText}, selBook);
+              }}
+            />
+
             <ChatHistory
               sessions={chatSessions}
               otherSessions={otherSessions}
@@ -5391,6 +5735,8 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
               mode={chatMode}
               setMode={setChatMode}
               deepDisabled={!bookCanUseDeep}
+              onToggleInsight={selBook ? (msg)=>toggleInsight(msg,selBook) : null}
+              savedMessageIds={new Set(insights.filter(ins=>ins.bookId===selBook?.id).map(ins=>ins.messageId))}
             />
           </div>
         )}
@@ -5485,6 +5831,8 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
               mode={globalChatMode}
               setMode={setGlobalChatMode}
               deepDisabled={false}
+              onToggleInsight={null}
+              savedMessageIds={new Set()}
             />
           </div>
         )}
@@ -5503,6 +5851,18 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
               onBack={()=>{ setSelConcept(null); setConceptDetail(null); }}
               onUpdate={()=>updateConceptsAll(false)}
               onReprocessAll={()=>updateConceptsAll(true)}
+            />
+          </div>
+        )}
+
+        {screen==="insights" && (
+          <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}}>
+            <InsightsPage
+              insights={insights}
+              insightEmbeddings={insightEmbeddings}
+              openaiKey={openaiKey}
+              cats={cats}
+              profiles={[userName,...otherProfiles]}
             />
           </div>
         )}
