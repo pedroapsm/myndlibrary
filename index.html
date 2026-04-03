@@ -396,23 +396,41 @@ function arrayBufferToBase64(buffer){
 
 // Gera embedding de um texto via OpenAI API
 async function generateEmbedding(text, openaiKey){
-  const r = await fetch("https://api.openai.com/v1/embeddings", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "Authorization": `Bearer ${openaiKey}`
-    },
-    body: JSON.stringify({
-      model: "text-embedding-3-small",
-      input: text.slice(0, 8000) // limite seguro por chunk
-    })
-  });
+  let r;
+  try{
+    const controller = new AbortController();
+    const timeout = setTimeout(()=>controller.abort(), 8000); // 8s timeout
+    r = await fetch("https://api.openai.com/v1/embeddings", {
+      method: "POST",
+      signal: controller.signal,
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${openaiKey}`
+      },
+      body: JSON.stringify({
+        model: "text-embedding-3-small",
+        input: text.slice(0, 8000)
+      })
+    });
+    clearTimeout(timeout);
+  }catch(err){
+    if(err.name === "AbortError"){
+      throw new Error("Sem conexão com a API. Verifique sua internet ou se há saldo disponível na conta Anthropic.");
+    }
+    throw new Error("Sem conexão com a API. Verifique sua internet ou se há saldo disponível na conta Anthropic.");
+  }
   if(!r.ok){
     const e = await r.json().catch(()=>({}));
-    throw new Error(e?.error?.message || `OpenAI HTTP ${r.status}`);
+    const msg = e?.error?.message || "";
+    if(r.status === 401) throw new Error("Chave OpenAI inválida. Verifique sua chave nas configurações.");
+    if(r.status === 429) throw new Error("Limite de requisições OpenAI atingido. Aguarde e tente novamente.");
+    if(msg.toLowerCase().includes("billing") || msg.toLowerCase().includes("quota")){
+      throw new Error("Saldo insuficiente na conta OpenAI. Verifique em platform.openai.com/account/billing.");
+    }
+    throw new Error(msg || `Erro OpenAI (HTTP ${r.status}).`);
   }
   const data = await r.json();
-  return data.data[0].embedding; // array de 1536 floats
+  return data.data[0].embedding;
 }
 
 // Similaridade coseno entre dois vetores
@@ -3890,7 +3908,12 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
       setBookMsgs(final);
       await saveCurrentChat(final);
     }catch(e){
-      setBookMsgs(p=>[...p,mkM("assistant","Erro: " + e.message + ". Tente novamente.")]);
+      const msg = e.message || "Erro desconhecido.";
+      const isFetch = msg.toLowerCase().includes("failed to fetch") || msg.toLowerCase().includes("networkerror");
+      const display = isFetch
+        ? "Sem conexão com a API. Verifique sua internet ou se há saldo disponível na conta Anthropic."
+        : msg;
+      setBookMsgs(p=>[...p,mkM("assistant", display)]);
     }
 
     setChatLoading(false);
@@ -3965,7 +3988,12 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
       setGlobalMsgs(final);
       await saveCurrentGlobalChat(final);
     }catch(e){
-      setGlobalMsgs(p=>[...p,mkM("assistant","Erro: " + e.message + ". Tente novamente.")]);
+      const msg = e.message || "Erro desconhecido.";
+      const isFetch = msg.toLowerCase().includes("failed to fetch") || msg.toLowerCase().includes("networkerror");
+      const display = isFetch
+        ? "Sem conexão com a API. Verifique sua internet ou se há saldo disponível na conta Anthropic."
+        : msg;
+      setGlobalMsgs(p=>[...p,mkM("assistant", display)]);
     }
 
     setChatLoading(false);
