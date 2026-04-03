@@ -1413,7 +1413,7 @@ function BookModal({mode,initial,categories,onSave,onClose,uploading,prog,err,qu
             <div style={{height:4,background:C.border,borderRadius:2,overflow:"hidden"}}>
               <div style={{height:"100%",background:C.accent,width:`${prog}%`,transition:"width .3s",borderRadius:2}}/>
             </div>
-            <p style={{fontSize:13,color:C.inkF,marginTop:5}}>Processando PDF e gerando resumo…</p>
+            <p style={{fontSize:13,color:C.inkF,marginTop:5}}>Processando PDF e gerando sinopse…</p>
           </div>
         )}
 
@@ -3189,6 +3189,12 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
   const [stats,setStats] = useState({consultations:{}});
   const [screen,setScreen] = useState("home");
   const [selBook,setSelBook] = useState(null);
+  const selBookRef = useRef(null);
+  const screenRef  = useRef("home");
+
+  // Keep refs in sync with state for use in async callbacks
+  useEffect(()=>{ selBookRef.current = selBook; }, [selBook]);
+  useEffect(()=>{ screenRef.current  = screen;  }, [screen]);
   const [bookText,setBookText] = useState("");
   const [bookEmbeddings,setBookEmbeddings] = useState(null); // embeddings do livro aberto
   const [autoDecision,setAutoDecision] = useState(null);     // última decisão do modo automático
@@ -3388,12 +3394,25 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
     }
     setPendingFile(f);
     setUploadQualityAlert("");
+
+    // Parse do nome do arquivo — detecta padrão "Autor - Título.pdf"
+    const baseName = f.name.replace(/\.pdf$/i,"");
+    const dashMatch = baseName.match(/^(.+?)\s*[-–—]\s*(.+)$/);
+    let parsedTitle = "";
+    let parsedAuthor = "";
+    if(dashMatch){
+      parsedAuthor = dashMatch[1].trim();
+      parsedTitle  = dashMatch[2].trim();
+    }else{
+      parsedTitle = baseName.replace(/[-_]/g," ").trim();
+    }
+
     setModal({
       type:"add",
       initial:{
-        title:f.name.replace(/\.pdf$/i,"").replace(/[-_]/g," "),
-        author:"",
-        category:cats[0] || "",
+        title: parsedTitle,
+        author: parsedAuthor,
+        category: cats[0] || "",
         tags:[]
       }
     });
@@ -3558,8 +3577,11 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
       return next;
     });
 
-    // Se o livro deletado é o que está aberto ou o último lido, limpa tudo
-    const isCurrentBook = screen === "book" && selBook?.id === book.id;
+    // Usa refs para garantir valores atuais (evita closure stale)
+    const currentScreen  = screenRef.current;
+    const currentSelBook = selBookRef.current;
+
+    const isCurrentBook = currentScreen === "book" && currentSelBook?.id === book.id;
     const isLastBook = lastBook?.id === book.id;
 
     if(isCurrentBook){
