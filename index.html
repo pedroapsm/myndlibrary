@@ -1,4 +1,5 @@
 
+
 <!DOCTYPE html>
 <html lang="pt-BR">
 <head>
@@ -187,7 +188,17 @@ function normalizeCategories(categories){
   return uniqueCaseInsensitive(categories.map(normalizeCategory));
 }
 
-function normalizeBooks(books){
+const VALID_STATUSES = ["pending", "processing", "done", "error"];
+
+function normalizeStatus(val, orphanProcessing=false){
+  if(VALID_STATUSES.includes(val)){
+    if(orphanProcessing && val === "processing") return "error";
+    return val;
+  }
+  return "pending";
+}
+
+function normalizeBooks(books, orphanProcessing=false){
   if(!Array.isArray(books)) return [];
 
   return books.map(book => ({
@@ -198,9 +209,9 @@ function normalizeBooks(books){
     tags: normalizeTags(book?.tags),
     pages: Number(book?.pages) || 0,
     synopsis: book?.synopsis ?? null,
-    synopsisStatus: book?.synopsisStatus ?? "pending",
-    embeddingsStatus: book?.embeddingsStatus ?? "pending",
-    conceptsStatus: book?.conceptsStatus ?? "pending",
+    synopsisStatus:   normalizeStatus(book?.synopsisStatus,   orphanProcessing),
+    embeddingsStatus: normalizeStatus(book?.embeddingsStatus, orphanProcessing),
+    conceptsStatus:   normalizeStatus(book?.conceptsStatus,   orphanProcessing),
     addedAt: book?.addedAt || new Date().toISOString()
   }))
   .filter(b => b.title);
@@ -232,10 +243,10 @@ function debounceValue(value, delay, setter){
   return setTimeout(()=>setter(value), delay);
 }
 
-function migrateIndexData(raw){
+function migrateIndexData(raw, orphanProcessing=false){
   return {
     schemaVersion: CURRENT_SCHEMA_VERSION,
-    books: normalizeBooks(raw?.books),
+    books: normalizeBooks(raw?.books, orphanProcessing),
     categories: normalizeCategories(raw?.categories),
     wishlist: normalizeWishlist(raw?.wishlist),
     profiles: uniqueCaseInsensitive(raw?.profiles || [])
@@ -986,10 +997,31 @@ async function idbSet(k,v){
 // ─── File System ──────────────────────────────────────
 
 async function wf(dir,name,txt){
-  const fh=await dir.getFileHandle(name,{create:true});
-  const w=await fh.createWritable();
-  await w.write(txt);
-  await w.close();
+  const MAX_TRIES = 3;
+  const DELAY_MS  = 350;
+  let lastErr;
+  for(let attempt = 1; attempt <= MAX_TRIES; attempt++){
+    try{
+      const fh = await dir.getFileHandle(name, { create: true });
+      const w  = await fh.createWritable();
+      await w.write(txt);
+      await w.close();
+      return;
+    }catch(e){
+      lastErr = e;
+      const isPermission = e.name === "InvalidStateError" || e.name === "AbortError" || e.name === "NotAllowedError";
+      if(isPermission && attempt < MAX_TRIES){
+        try{ await dir.requestPermission({ mode:"readwrite" }); }catch{}
+        await new Promise(r => setTimeout(r, DELAY_MS));
+        continue;
+      }
+      if(attempt < MAX_TRIES){
+        await new Promise(r => setTimeout(r, DELAY_MS));
+        continue;
+      }
+    }
+  }
+  throw new Error(`Falha ao salvar "${name}" após ${MAX_TRIES} tentativas: ${lastErr?.message || "erro desconhecido"}`);
 }
 
 async function rf(dir,name){
@@ -1043,7 +1075,7 @@ async function loadIdx(dir){
 
   try{
     const parsed = JSON.parse(txt);
-    const migrated = migrateIndexData(parsed);
+    const migrated = migrateIndexData(parsed, true);
 
     const validCats = new Set(migrated.categories);
     const fixedBooks = migrated.books.map(book=>{
@@ -1238,24 +1270,20 @@ async function callClaude(apiKey,system,messages,maxTok=1200){
 }
 
 function buildBookContextPrompt(title, query, chunks){
-  const excerpts = chunks.map((chunk, idx)=>(
-    `[Trecho ${idx+1} | posição ${chunk.start}-${chunk.end}]\n${chunk.content}`
-  )).join("\n\n");
+  const excerpts = chunks.map(chunk => chunk.content).join("\n\n---\n\n");
 
-  return `Você é um assistente literário especializado no livro "${title}". Responda APENAS com base nos trechos abaixo. Não use conhecimento externo. Se a resposta não estiver clara nos trechos, diga isso explicitamente. Responda em português e, quando útil, cite os números dos trechos usados.
+  return `Você é um assistente literário especializado no livro "${title}". Responda APENAS com base nos trechos abaixo. Não use conhecimento externo. Se a resposta não estiver clara nos trechos, diga isso explicitamente. Responda em português de forma natural e fluida — sem mencionar "trechos", "posições", "chunks" ou qualquer estrutura interna. Não use títulos com ##. Use parágrafos, listas simples ou negrito quando necessário, com moderação.
 
 PERGUNTA:
 ${query}
 
-TRECHOS RELEVANTES:
+CONTEÚDO DO LIVRO:
 ${excerpts}`;
 }
 
 function buildGlobalContextPrompt(query, entries){
-  const body = entries.map((entry, bookIdx)=>{
-    const chunkText = entry.chunks.map((chunk, idx)=>(
-      `[Livro ${bookIdx+1} | Trecho ${idx+1} | posição ${chunk.start}-${chunk.end}]\n${chunk.content}`
-    )).join("\n\n");
+  const body = entries.map((entry)=>{
+    const chunkText = entry.chunks.map(chunk => chunk.content).join("\n\n---\n\n");
 
     return `${"─".repeat(48)}
 📖 ${entry.book.title}${entry.book.author?` | ${entry.book.author}`:""}${entry.book.category?` [${entry.book.category}]`:""}
@@ -1263,12 +1291,12 @@ ${"─".repeat(48)}
 ${chunkText}`;
   }).join("\n\n");
 
-  return `Você é um assistente com acesso à biblioteca do usuário. Responda APENAS com base nos livros e trechos abaixo. Sempre deixe claro de qual livro vem cada informação. Se não houver base suficiente, diga isso claramente. Responda em português.
+  return `Você é um assistente com acesso à biblioteca do usuário. Responda APENAS com base nos livros abaixo. Sempre indique de qual livro vem cada informação, de forma natural (ex: "Em War, Bob Woodward descreve…"). Responda em português de forma fluida — sem mencionar "trechos", "posições" ou estrutura interna. Não use títulos com ##. Use parágrafos e listas simples quando necessário.
 
 PERGUNTA:
 ${query}
 
-BIBLIOTECA SELECIONADA:
+BIBLIOTECA:
 ${body}`;
 }
 
@@ -1277,11 +1305,70 @@ async function fetchBookSynopsis(apiKey, title, author){
   const query = author ? `${title} — ${author}` : title;
   const r = await callClaude(
     apiKey,
-    `Você é um assistente literário. Baseado no seu conhecimento geral, escreva uma sinopse concisa do livro em português (4 a 6 frases): do que trata, contexto, para quem é indicado e por que vale a pena ler. Seja direto. Não mencione que está usando conhecimento externo.`,
+    `Você é um assistente literário. Baseado no seu conhecimento geral, escreva uma sinopse concisa do livro em português (4 a 6 frases): do que trata, contexto, para quem é indicado e por que vale a pena ler. Seja direto. Não use markdown, não use títulos, não use negrito. Texto corrido.`,
     [{ role:"user", content:`Livro: ${query}` }],
     400
   );
   return r;
+}
+
+// ─── Markdown Renderer (React controlado, sem dangerouslySetInnerHTML) ────────
+// Suporta: parágrafos, listas simples (- item), negrito (**texto**).
+// Remove ## títulos (converte em parágrafo normal).
+
+function renderInline(text){
+  const parts = text.split(/(\*\*[^*]+\*\*)/g);
+  return parts.map((part, i) => {
+    if(part.startsWith("**") && part.endsWith("**")){
+      return <strong key={i}>{part.slice(2,-2)}</strong>;
+    }
+    return part;
+  });
+}
+
+function MarkdownText({ text, style={} }){
+  if(!text) return null;
+  const normalized = text
+    .replace(/\r\n/g,"\n")
+    .replace(/^#{1,6}\s+/gm,"")
+    .trim();
+  const blocks = normalized.split(/\n{2,}/);
+  const elements = [];
+  let listBuffer = [];
+  const flushList = (key) => {
+    if(!listBuffer.length) return;
+    elements.push(
+      <ul key={`ul_${key}`} style={{paddingLeft:20,margin:"4px 0",display:"flex",flexDirection:"column",gap:2}}>
+        {listBuffer.map((item,i)=>(
+          <li key={i} style={{fontSize:14,color:"#3d3530",lineHeight:1.7}}>{renderInline(item)}</li>
+        ))}
+      </ul>
+    );
+    listBuffer = [];
+  };
+  blocks.forEach((block, i)=>{
+    const lines = block.split("\n");
+    const listItems = lines.filter(l=>/^[-•*]\s/.test(l.trim()));
+    if(listItems.length === lines.filter(l=>l.trim()).length && listItems.length > 0){
+      listBuffer.push(...listItems.map(l=>l.replace(/^[-•*]\s+/,"").trim()));
+    } else {
+      flushList(i);
+      const clean = block.trim();
+      if(clean){
+        elements.push(
+          <p key={i} style={{fontSize:14,color:"#3d3530",lineHeight:1.75,margin:0}}>
+            {renderInline(clean)}
+          </p>
+        );
+      }
+    }
+  });
+  flushList("end");
+  return(
+    <div style={{display:"flex",flexDirection:"column",gap:10,...style}}>
+      {elements}
+    </div>
+  );
 }
 
 // ─── Theme ────────────────────────────────────────────
@@ -1336,7 +1423,8 @@ const D = {
   play:"M5 3l14 9-14 9V3z",
   save:"M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2zM17 21v-8H7v8M7 3v5h8",
   arrowUp:"M12 19V5M6 11l6-6 6 6",
-  arrowDown:"M12 5v14M6 13l6 6 6-6"
+  arrowDown:"M12 5v14M6 13l6 6 6-6",
+  logoff:"M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"
 };
 
 // ─── Base styles ──────────────────────────────────────
@@ -1391,6 +1479,50 @@ const tp = {
 const sbLb = {
   fontSize:10, letterSpacing:"0.12em", textTransform:"uppercase", color:C.sbInkF, fontWeight:600
 };
+
+// ─── BookProcessingStatus ─────────────────────────────
+// Mostra status de sinopse, embeddings e conceitos no header do livro.
+// Aparece apenas quando há algo em processing ou error. Some quando tudo done.
+
+function BookProcessingStatus({ book, onRetry }){
+  const items = [
+    { key:"synopsisStatus",   label:"Sinopse" },
+    { key:"embeddingsStatus", label:"Índice semântico" },
+    { key:"conceptsStatus",   label:"Conceitos" },
+  ];
+  const relevant = items.filter(it => book[it.key] === "processing" || book[it.key] === "error");
+  if(!relevant.length) return null;
+
+  return(
+    <div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
+      {relevant.map(it=>{
+        const isProcessing = book[it.key] === "processing";
+        const isError      = book[it.key] === "error";
+        return(
+          <span key={it.key} style={{
+            display:"flex",alignItems:"center",gap:5,
+            fontSize:11,padding:"2px 9px",borderRadius:10,fontWeight:600,
+            background: isError ? "rgba(122,30,30,.08)" : "rgba(122,90,26,.08)",
+            color: isError ? "#7a1e1e" : "#7a5a1a",
+            border: `1px solid ${isError ? "rgba(122,30,30,.28)" : "rgba(122,90,26,.25)"}`
+          }}>
+            {isProcessing && <span style={{animation:"bob .9s infinite"}}>⟳</span>}
+            {isError && "✗"}
+            {" "}{it.label}
+            {isError && (
+              <button
+                onClick={()=>onRetry(it.key)}
+                style={{background:"none",border:"none",cursor:"pointer",color:"#2d6be4",fontSize:11,fontWeight:700,padding:"0 0 0 4px",textDecoration:"underline"}}
+              >
+                Retry
+              </button>
+            )}
+          </span>
+        );
+      })}
+    </div>
+  );
+}
 
 // ─── TagInput ──────────────────────────────────────────
 
@@ -2186,10 +2318,12 @@ function NotesPanel({dirHandle,bookId,profileId,otherProfiles,synopsis,synopsisS
         }}>
           {synopsis ? (
             <p style={{fontSize:13.5, color:C.inkD, lineHeight:1.75}}>{synopsis}</p>
-          ) : synopsisStatus === "pending" ? (
+          ) : synopsisStatus === "pending" || synopsisStatus === "processing" ? (
             <p style={{fontSize:13, color:C.inkF, fontStyle:"italic", lineHeight:1.6}}>
-              Sinopse ainda não gerada. Será buscada automaticamente quando disponível.
+              {synopsisStatus === "processing" ? "Gerando sinopse…" : "Sinopse ainda não gerada."}
             </p>
+          ) : synopsisStatus === "error" ? (
+            <p style={{fontSize:13, color:"#7a1e1e", fontStyle:"italic"}}>Erro ao gerar sinopse.</p>
           ) : (
             <p style={{fontSize:13, color:C.inkF, fontStyle:"italic"}}>Sinopse indisponível.</p>
           )}
@@ -2362,17 +2496,18 @@ function ChatArea({messages,loading,onSend,placeholder,emptyNode,onExport,mode,s
 
             <div
               style={{
-                padding:"8px 12px",
+                padding:"10px 14px",
                 borderRadius:8,
-                fontSize:14,
-                lineHeight:1.65,
-                whiteSpace:"pre-wrap",
                 background:m.role==="user" ? "#eaf0fb" : C.card,
                 border:`1px solid ${m.role==="user"?C.accentBrd:C.border}`,
-                color:C.ink
+                color:C.ink,
+                maxWidth:"100%"
               }}
             >
-              {m.content}
+              {m.role==="assistant"
+                ? <MarkdownText text={m.content}/>
+                : <span style={{fontSize:14,lineHeight:1.65}}>{m.content}</span>
+              }
             </div>
           </div>
         ))}
@@ -3021,7 +3156,8 @@ function Sidebar({
   fileRef,
   handleFilePick,
   onDeleteBook,
-  onEditBook
+  onEditBook,
+  onLogoff
 }){
   const booksScrollRef=useRef(null);
   const [sortKey,setSortKey]=useState("addedAt");
@@ -3058,6 +3194,15 @@ function Sidebar({
             <Ico d={D.book} sz={17} col={C.sbInk}/> Mynd Library
           </div>
           <ProfileSwitcher userName={userName} onSwitch={switchProfile} profiles={profiles}/>
+          <button
+            title="Sair / Trocar pasta"
+            onClick={onLogoff}
+            style={{background:"none",border:"1px solid rgba(255,255,255,.18)",borderRadius:6,padding:"5px 7px",cursor:"pointer",color:"rgba(255,255,255,.62)",display:"flex",alignItems:"center",transition:"color .15s, border-color .15s"}}
+            onMouseEnter={e=>{ e.currentTarget.style.color="#fff"; e.currentTarget.style.borderColor="rgba(255,255,255,.5)"; }}
+            onMouseLeave={e=>{ e.currentTarget.style.color="rgba(255,255,255,.62)"; e.currentTarget.style.borderColor="rgba(255,255,255,.18)"; }}
+          >
+            <Ico d={D.logoff} sz={13} col="currentColor"/>
+          </button>
         </div>
       </div>
 
@@ -3331,6 +3476,12 @@ function Sidebar({
                   <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap",minWidth:0}}>
                     {b.category && <div style={{fontSize:10,color:C.sbInkF}}>{b.category}</div>}
                     {b._hasNotes && <div style={{fontSize:10,color:"#c7e4ff"}}>Notas</div>}
+                    {(b.synopsisStatus==="processing"||b.embeddingsStatus==="processing"||b.conceptsStatus==="processing") && (
+                      <div style={{fontSize:10,color:"#c4962a",animation:"bob .9s infinite"}}>⟳</div>
+                    )}
+                    {(b.synopsisStatus==="error"||b.embeddingsStatus==="error"||b.conceptsStatus==="error") && (
+                      <div style={{fontSize:10,color:"#e07070"}}>✗</div>
+                    )}
                   </div>
 
                   <div style={{display:"flex",gap:4,flexShrink:0}}>
@@ -3922,23 +4073,9 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
         setUploadQualityAlert(`O PDF pode ter sido extraído com baixa qualidade. ${quality.flags.join(" | ")}`);
       }
 
-      setUpProg(35);
-
-      // ── Buscar sinopse externa via API (título + autor) ──
-      let synopsis = null;
-      let synopsisStatus = "pending";
-      try{
-        synopsis = await fetchBookSynopsis(apiKey, trimStr(fd.title), trimStr(fd.author));
-        synopsisStatus = "done";
-      }catch{
-        // Falha silenciosa — synopsisStatus permanece "pending", será tentado ao abrir o livro
-      }
-
-      setUpProg(55);
+      setUpProg(60);
 
       const id=uid();
-      // embeddingsStatus será atualizado depois da tentativa de geração
-      let embeddingsStatus = "pending";
 
       const book={
         id,
@@ -3947,9 +4084,10 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
         category: nextCats.includes(normalizedCategory) ? normalizedCategory : "",
         tags:normalizeTags(fd.tags),
         pages,
-        synopsis,
-        synopsisStatus,
-        embeddingsStatus,
+        synopsis: null,
+        synopsisStatus: "pending",
+        embeddingsStatus: openaiKey ? "pending" : "done",
+        conceptsStatus: "pending",
         addedAt:new Date().toISOString(),
         _hasNotes:false,
         _hasChats:false
@@ -3957,55 +4095,94 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
 
       await wf(dirHandle,`${id}.txt`,text);
 
-      // Salvar PDF original para modo Profundo
       const pdfBuffer = await pendingFile.arrayBuffer();
       await wf(dirHandle,`${id}.pdf`, new Uint8Array(pdfBuffer));
 
-      setUpProg(65);
-
-      // ── Gerar e salvar embeddings (se chave OpenAI disponível) ──
-      if(openaiKey){
-        try{
-          const chunks = splitTextIntoChunks(text);
-          await generateAndSaveEmbeddings(id, chunks, dirHandle, openaiKey, pct=>{
-            setUpProg(65 + Math.round(pct * 0.22));
-          });
-          embeddingsStatus = "done";
-          book.embeddingsStatus = "done";
-        }catch(embErr){
-          console.warn("Embeddings não gerados:", embErr.message);
-        }
-      }
-
-      // ── Extrair conceitos (silencioso, falha não bloqueia) ──
-      let conceptsStatus = "pending";
-      try{
-        const concepts = await extractConceptsForBook(id, text, trimStr(fd.title), apiKey);
-        if(concepts.length > 0){
-          await saveBookConcepts(dirHandle, id, concepts);
-          conceptsStatus = "done";
-          book.conceptsStatus = "done";
-        }
-      }catch(cErr){
-        console.warn("Conceitos não extraídos:", cErr.message);
-      }
-
-      setUpProg(97);
+      setUpProg(90);
 
       const nb=[...books,book];
       setBooks(nb);
       await persist(nb,nextCats,wishlist,profiles);
 
       setUpProg(100);
-      pushToast(quality.isSuspect ? "Livro adicionado com alerta de qualidade do PDF" : "Livro adicionado à biblioteca");
 
+      // Fecha modal imediatamente
       setTimeout(()=>{
         setModal(null);
         setPendingFile(null);
         setUploading(false);
         setUpProg(0);
         setUploadQualityAlert("");
-      },500);
+      },300);
+
+      pushToast("Livro adicionado — processando em background…");
+
+      // Background: sinopse + embeddings + conceitos
+      setTimeout(async()=>{
+        const bookId = id;
+        const bookTitle = trimStr(fd.title);
+        const bookAuthor = trimStr(fd.author);
+
+        // Sinopse
+        setBooks(prev=>prev.map(b=>b.id===bookId?{...b,synopsisStatus:"processing"}:b));
+        try{
+          const synopsis = await fetchBookSynopsis(apiKey, bookTitle, bookAuthor);
+          setBooks(prev=>{
+            const nb2=prev.map(b=>b.id===bookId?{...b,synopsis,synopsisStatus:"done"}:b);
+            persist(nb2,nextCats,wishlist,profiles);
+            return nb2;
+          });
+          if(selBookRef.current?.id===bookId) setSelBook(p=>p?{...p,synopsis,synopsisStatus:"done"}:p);
+        }catch(e){
+          console.warn("Sinopse falhou:",e.message);
+          setBooks(prev=>prev.map(b=>b.id===bookId?{...b,synopsisStatus:"error"}:b));
+          if(selBookRef.current?.id===bookId) setSelBook(p=>p?{...p,synopsisStatus:"error"}:p);
+        }
+
+        // Embeddings
+        if(openaiKey){
+          setBooks(prev=>prev.map(b=>b.id===bookId?{...b,embeddingsStatus:"processing"}:b));
+          if(selBookRef.current?.id===bookId) setSelBook(p=>p?{...p,embeddingsStatus:"processing"}:p);
+          try{
+            const chunks = splitTextIntoChunks(text);
+            const embs = await generateAndSaveEmbeddings(bookId, chunks, dirHandle, openaiKey, ()=>{});
+            setBooks(prev=>{
+              const nb2=prev.map(b=>b.id===bookId?{...b,embeddingsStatus:"done"}:b);
+              persist(nb2,nextCats,wishlist,profiles);
+              return nb2;
+            });
+            if(selBookRef.current?.id===bookId){
+              setSelBook(p=>p?{...p,embeddingsStatus:"done"}:p);
+              setBookEmbeddings(embs);
+            }
+            pushToast("Índice semântico gerado");
+          }catch(e){
+            console.warn("Embeddings falharam:",e.message);
+            setBooks(prev=>prev.map(b=>b.id===bookId?{...b,embeddingsStatus:"error"}:b));
+            if(selBookRef.current?.id===bookId) setSelBook(p=>p?{...p,embeddingsStatus:"error"}:p);
+          }
+        }
+
+        // Conceitos
+        setBooks(prev=>prev.map(b=>b.id===bookId?{...b,conceptsStatus:"processing"}:b));
+        try{
+          const concepts = await extractConceptsForBook(bookId, text, bookTitle, apiKey);
+          if(concepts.length > 0){
+            await saveBookConcepts(dirHandle, bookId, concepts);
+            setBooks(prev=>{
+              const nb2=prev.map(b=>b.id===bookId?{...b,conceptsStatus:"done"}:b);
+              persist(nb2,nextCats,wishlist,profiles);
+              return nb2;
+            });
+          } else {
+            setBooks(prev=>prev.map(b=>b.id===bookId?{...b,conceptsStatus:"error"}:b));
+          }
+        }catch(e){
+          console.warn("Conceitos falharam:",e.message);
+          setBooks(prev=>prev.map(b=>b.id===bookId?{...b,conceptsStatus:"error"}:b));
+        }
+      }, 500);
+
     }catch(e){
       setUpErr("Erro: " + e.message);
       setUploading(false);
@@ -4223,46 +4400,56 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
     setOpeningBook(false);
 
     // ── Tentar buscar sinopse pendente silenciosamente ──
-    if(freshBook.synopsisStatus === "pending" || (!freshBook.synopsis && freshBook.synopsisStatus !== "done")){
+    // Só busca se synopsis é null E status não for "done" nem "processing"
+    if(!freshBook.synopsis && freshBook.synopsisStatus !== "done" && freshBook.synopsisStatus !== "processing"){
+      const fid = freshBook.id;
+      setBooks(prev=>prev.map(b=>b.id===fid?{...b,synopsisStatus:"processing"}:b));
+      setSelBook(p=>p?{...p,synopsisStatus:"processing"}:p);
       fetchBookSynopsis(apiKey, freshBook.title, freshBook.author)
         .then(async synopsis => {
-          const updated = { ...freshBook, synopsis, synopsisStatus:"done" };
-          setSelBook(updated);
-          const nb = books.map(b => b.id === freshBook.id ? updated : b);
-          setBooks(nb);
-          await persist(nb, cats, wishlist, profiles);
+          setBooks(prev=>{
+            const nb=prev.map(b=>b.id===fid?{...b,synopsis,synopsisStatus:"done"}:b);
+            persist(nb,cats,wishlist,profiles);
+            return nb;
+          });
+          setSelBook(p=>p?{...p,synopsis,synopsisStatus:"done"}:p);
         })
-        .catch(() => { /* silencioso — tenta na próxima abertura */ });
+        .catch(()=>{
+          setBooks(prev=>prev.map(b=>b.id===fid?{...b,synopsisStatus:"error"}:b));
+          setSelBook(p=>p?{...p,synopsisStatus:"error"}:p);
+        });
     }
 
     // ── Gerar embeddings pendentes silenciosamente ──
-    // Só tenta se: tem chave OpenAI, não tem embeddings salvos, e status é "pending"
     const needsEmbeddings = openaiKey
       && !embs
-      && (freshBook.embeddingsStatus === "pending" || !freshBook.embeddingsStatus);
+      && freshBook.embeddingsStatus !== "done"
+      && freshBook.embeddingsStatus !== "processing";
 
     if(needsEmbeddings){
+      const fid = freshBook.id;
       setGeneratingEmbeddings(true);
-      const bookText = await rf(dirHandle, `${freshBook.id}.txt`) || "";
-      const chunks = splitTextIntoChunks(bookText);
+      setBooks(prev=>prev.map(b=>b.id===fid?{...b,embeddingsStatus:"processing"}:b));
+      setSelBook(p=>p?{...p,embeddingsStatus:"processing"}:p);
+      const bookTextForEmb = await rf(dirHandle, `${fid}.txt`) || "";
+      const chunks = splitTextIntoChunks(bookTextForEmb);
 
-      generateAndSaveEmbeddings(freshBook.id, chunks, dirHandle, openaiKey, ()=>{})
+      generateAndSaveEmbeddings(fid, chunks, dirHandle, openaiKey, ()=>{})
         .then(async generatedEmbs => {
-          // Atualiza estado em memória para uso imediato
           setBookEmbeddings(generatedEmbs);
           setGeneratingEmbeddings(false);
-
-          // Persiste o status no livro
-          const updated = { ...freshBook, embeddingsStatus:"done" };
-          setSelBook(updated);
-          const nb = books.map(b => b.id === freshBook.id ? updated : b);
-          setBooks(nb);
-          await persist(nb, cats, wishlist, profiles);
+          setBooks(prev=>{
+            const nb=prev.map(b=>b.id===fid?{...b,embeddingsStatus:"done"}:b);
+            persist(nb,cats,wishlist,profiles);
+            return nb;
+          });
+          setSelBook(p=>p?{...p,embeddingsStatus:"done"}:p);
           pushToast("Índice semântico gerado");
         })
-        .catch(() => {
+        .catch(()=>{
           setGeneratingEmbeddings(false);
-          // Silencioso — embeddingsStatus permanece "pending", tenta na próxima abertura
+          setBooks(prev=>prev.map(b=>b.id===fid?{...b,embeddingsStatus:"error"}:b));
+          setSelBook(p=>p?{...p,embeddingsStatus:"error"}:p);
         });
     }
   };
@@ -4543,9 +4730,9 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
         const excerpts = relevantChunks.slice(0,4).map((c,i)=>`[${c.bookTitle} — Trecho ${i+1}]\n${c.content}`).join("\n\n");
         synthesis = await callClaude(
           apiKey,
-          `Você é um assistente literário. Com base nos trechos abaixo, escreva uma síntese em português sobre o conceito "${concept}" — como ele aparece e é tratado nesta biblioteca. Escreva em parágrafos claros, sem bullet points. Máximo 4 parágrafos.`,
+          `Você é um assistente literário. Escreva um parágrafo direto de no máximo 100 palavras sobre como o conceito "${concept}" aparece nesta biblioteca. Sem títulos, sem markdown, sem bullet points, sem negrito. Tom direto e fluido. Texto corrido.`,
           [{ role:"user", content:`Livros relacionados: ${bookNames}\n\nTrechos:\n${excerpts}` }],
-          600
+          300
         );
         // Salva síntese no índice
         const updatedIndex = {
@@ -4567,9 +4754,9 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
         const bookNames = relatedBooks.map(b=>b.title).join(", ");
         connections = await callClaude(
           apiKey,
-          `Você é um assistente literário. Com base nos trechos fornecidos, explique brevemente como o conceito "${concept}" aparece de forma diferente ou complementar em cada livro. Seja direto e conciso. Responda em português.`,
+          `Explique brevemente, em texto corrido sem markdown, como o conceito "${concept}" aparece de forma diferente ou complementar em cada livro. Máximo 80 palavras. Sem títulos, sem bullet points.`,
           [{ role:"user", content:`Livros: ${bookNames}\n\nTrechos:\n${relevantChunks.slice(0,6).map((c,i)=>`[${c.bookTitle}]\n${c.content}`).join("\n\n")}` }],
-          400
+          250
         );
       }catch{ connections = null; }
     }
@@ -4866,6 +5053,61 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
     }
   };
 
+  const handleLogoff=async()=>{
+    if(!confirm("Sair e voltar à tela de configuração? Seus dados permanecem na pasta.")) return;
+    try{ await indexedDB.deleteDatabase("mynd_library_v5"); }catch{}
+    localStorage.removeItem("mynd_user");
+    localStorage.removeItem("mynd_apikey");
+    localStorage.removeItem("mynd_openai_apikey");
+    window.location.reload();
+  };
+
+  const handleRetry=async(statusKey)=>{
+    const book = selBookRef.current;
+    if(!book) return;
+    const text = await rf(dirHandle,`${book.id}.txt`) || "";
+
+    const updateStatus=(s)=>{
+      setBooks(prev=>{ const nb=prev.map(b=>b.id===book.id?{...b,[statusKey]:s}:b); persist(nb,cats,wishlist,profiles); return nb; });
+      setSelBook(p=>p?{...p,[statusKey]:s}:p);
+    };
+
+    updateStatus("processing");
+
+    if(statusKey==="synopsisStatus"){
+      try{
+        const synopsis = await fetchBookSynopsis(apiKey, book.title, book.author);
+        setBooks(prev=>{ const nb=prev.map(b=>b.id===book.id?{...b,synopsis,synopsisStatus:"done"}:b); persist(nb,cats,wishlist,profiles); return nb; });
+        setSelBook(p=>p?{...p,synopsis,synopsisStatus:"done"}:p);
+      }catch(e){
+        updateStatus("error");
+      }
+    } else if(statusKey==="embeddingsStatus"){
+      if(!openaiKey){ updateStatus("error"); return; }
+      try{
+        const chunks = splitTextIntoChunks(text);
+        const embs = await generateAndSaveEmbeddings(book.id, chunks, dirHandle, openaiKey, ()=>{});
+        updateStatus("done");
+        if(selBookRef.current?.id===book.id) setBookEmbeddings(embs);
+        pushToast("Índice semântico gerado");
+      }catch(e){
+        updateStatus("error");
+      }
+    } else if(statusKey==="conceptsStatus"){
+      try{
+        const concepts = await extractConceptsForBook(book.id, text, book.title, apiKey);
+        if(concepts.length > 0){
+          await saveBookConcepts(dirHandle, book.id, concepts);
+          updateStatus("done");
+        } else {
+          updateStatus("error");
+        }
+      }catch(e){
+        updateStatus("error");
+      }
+    }
+  };
+
   const updateBookNotesPresence=async(bookId,hasNotes)=>{
     const nb=books.map(b=>b.id===bookId ? {...b,_hasNotes:hasNotes} : b);
     setBooks(nb);
@@ -4899,6 +5141,7 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
         userName={userName}
         profiles={profiles}
         switchProfile={switchProfile}
+        onLogoff={handleLogoff}
         screen={screen}
         setScreen={setScreen}
         openGlobal={openGlobal}
@@ -5007,6 +5250,7 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
                       </span>
                     </>
                   )}
+                  <BookProcessingStatus book={selBook} onRetry={handleRetry}/>
                 </div>
               </div>
               <button style={bI} onClick={()=>{setEditBook(selBook); setModal({type:"edit",initial:selBook});}}><Ico d={D.edit} sz={14}/></button>
