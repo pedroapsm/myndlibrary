@@ -1,6 +1,7 @@
 
 
 
+
 <!DOCTYPE html>
 <html lang="pt-BR">
 <head>
@@ -1581,45 +1582,73 @@ const sbLb = {
 };
 
 // ─── BookProcessingStatus ─────────────────────────────
-// Mostra status de sinopse, embeddings e conceitos no header do livro.
-// Aparece apenas quando há algo em processing ou error. Some quando tudo done.
+// Deriva um único estado visível do livro a partir dos campos internos.
+// Prioridade: erro > preparando > pronto.
+
+const ERROR_MESSAGES = {
+  synopsisStatus:  "Não foi possível gerar a sinopse",
+  conceptsStatus:  "Não foi possível preparar as ideias principais",
+};
+
+function deriveBookStatus(book){
+  const fields = ["synopsisStatus", "conceptsStatus"];
+
+  // 1. Prioridade: qualquer erro
+  const errorField = fields.find(f => book[f] === "error");
+  if(errorField) return { state:"atencao", errorKey: errorField };
+
+  // 2. Qualquer campo ainda processando
+  const processing = fields.some(f => book[f] === "processing");
+  if(processing) return { state:"preparando" };
+
+  // 3. Tudo pronto
+  return { state:"pronto" };
+}
 
 function BookProcessingStatus({ book, onRetry }){
-  const items = [
-    { key:"synopsisStatus",   label:"Sinopse" },
-    { key:"conceptsStatus",   label:"Conceitos" },
-  ];
-  const relevant = items.filter(it => book[it.key] === "processing" || book[it.key] === "error");
-  if(!relevant.length) return null;
+  const status = deriveBookStatus(book);
+
+  const isError = status.state === "atencao";
+  const isPrep  = status.state === "preparando";
+  const isDone  = status.state === "pronto";
+
+  const bg    = isError ? "rgba(122,30,30,.08)"
+              : isPrep  ? "rgba(122,90,26,.08)"
+              :            "rgba(30,116,76,.07)";
+  const color = isError ? "#7a1e1e"
+              : isPrep  ? "#7a5a1a"
+              :            "#1a6b42";
+  const brd   = isError ? "rgba(122,30,30,.28)"
+              : isPrep  ? "rgba(122,90,26,.25)"
+              :            "rgba(30,116,76,.25)";
+
+  const errorMsg = isError
+    ? (ERROR_MESSAGES[status.errorKey] || "Não foi possível preparar este livro")
+    : null;
 
   return(
-    <div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
-      {relevant.map(it=>{
-        const isProcessing = book[it.key] === "processing";
-        const isError      = book[it.key] === "error";
-        return(
-          <span key={it.key} style={{
-            display:"flex",alignItems:"center",gap:5,
-            fontSize:11,padding:"2px 9px",borderRadius:10,fontWeight:600,
-            background: isError ? "rgba(122,30,30,.08)" : "rgba(122,90,26,.08)",
-            color: isError ? "#7a1e1e" : "#7a5a1a",
-            border: `1px solid ${isError ? "rgba(122,30,30,.28)" : "rgba(122,90,26,.25)"}`
-          }}>
-            {isProcessing && <span style={{animation:"bob .9s infinite"}}>⟳</span>}
-            {isError && "✗"}
-            {" "}{it.label}
-            {isError && (
-              <button
-                onClick={()=>onRetry(it.key)}
-                style={{background:"none",border:"none",cursor:"pointer",color:"#2d6be4",fontSize:11,fontWeight:700,padding:"0 0 0 4px",textDecoration:"underline"}}
-              >
-                Retry
-              </button>
-            )}
-          </span>
-        );
-      })}
-    </div>
+    <span style={{
+      display:"inline-flex", alignItems:"center", gap:5,
+      fontSize:11, padding:"2px 9px", borderRadius:10, fontWeight:600,
+      background:bg, color, border:`1px solid ${brd}`,
+      whiteSpace:"nowrap"
+    }}>
+      {isPrep && <span style={{animation:"bob .9s infinite"}}>⟳</span>}
+      {isPrep && "Preparando o livro"}
+      {isDone && "Livro pronto para perguntas"}
+      {isError && (
+        <>
+          {errorMsg}
+          {" · "}
+          <button
+            onClick={()=>onRetry(status.errorKey)}
+            style={{background:"none",border:"none",cursor:"pointer",color:"#2d6be4",fontSize:11,fontWeight:700,padding:0,textDecoration:"underline"}}
+          >
+            Tentar novamente
+          </button>
+        </>
+      )}
+    </span>
   );
 }
 
