@@ -4592,7 +4592,51 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey,
         };
       });
 
-      setBooks(booksWithMeta);
+      // ── Reconciliação de status no bootstrap ─────────────
+      // Verifica arquivos reais para cada livro e corrige status stale sem chamar APIs.
+      const reconciledBooks = await (async () => {
+        const corrected = await Promise.all(booksWithMeta.map(async book => {
+          let patch = {};
+
+          // synopsis: dado inline no objeto — verifica diretamente
+          if(book.synopsisStatus === "error" || book.synopsisStatus === "pending"){
+            if(book.synopsis && book.synopsis.trim()) patch.synopsisStatus = "done";
+          }
+
+          // embeddings: verifica arquivo real
+          if(book.embeddingsStatus !== "done"){
+            try{
+              const embs = await loadEmbeddings(dirHandle, book.id);
+              if(embs && embs.length) patch.embeddingsStatus = "done";
+            }catch{}
+          }
+
+          // concepts: verifica arquivo real
+          if(book.conceptsStatus !== "done"){
+            try{
+              const concepts = await loadBookConcepts(dirHandle, book.id);
+              if(concepts && concepts.length) patch.conceptsStatus = "done";
+            }catch{}
+          }
+
+          return Object.keys(patch).length ? {...book, ...patch} : book;
+        }));
+
+        const changed = corrected.some((b,i) =>
+          b.synopsisStatus  !== booksWithMeta[i].synopsisStatus  ||
+          b.embeddingsStatus !== booksWithMeta[i].embeddingsStatus ||
+          b.conceptsStatus  !== booksWithMeta[i].conceptsStatus
+        );
+
+        if(changed){
+          // Persiste uma única vez sem bloquear a UI
+          persist(corrected, idx.categories || [...DEF_CATS], idx.wishlist || [], idx.profiles || []);
+        }
+
+        return corrected;
+      })();
+
+      setBooks(reconciledBooks);
       setCats(idx.categories || [...DEF_CATS]);
       setWishlist(idx.wishlist || []);
       setProfiles(idx.profiles || []);
