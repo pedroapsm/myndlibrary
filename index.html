@@ -1,3 +1,8 @@
+
+
+
+
+
 <!DOCTYPE html>
 <html lang="pt-BR">
 <head>
@@ -4688,14 +4693,14 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey,
         );
 
         if(changed){
-          // Persiste uma única vez sem bloquear a UI
-          persist(corrected, idx.categories || [...DEF_CATS], idx.wishlist || [], idx.profiles || []);
+          booksRef.current=corrected;
         }
 
         return corrected;
       })();
 
       setBooks(reconciledBooks);
+      booksRef.current = reconciledBooks; // garante ref atualizada antes do persist abaixo
       setCats(idx.categories || [...DEF_CATS]);
       setWishlist(idx.wishlist || []);
       setProfiles(idx.profiles || []);
@@ -4731,25 +4736,22 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey,
   },[tagDraft]);
 
   const persistQueueRef = useRef(Promise.resolve());
-  // Refs para estado atual — evita closure stale nos jobs de background
+  // Refs para TODAS as fontes de estado — persist nunca aceita argumentos externos
+  const booksRef    = useRef([]);
   const catsRef     = useRef(cats);
   const wishlistRef = useRef(wishlist);
   const profilesRef = useRef(profiles);
+  useEffect(()=>{ booksRef.current    = books;    },[books]);
   useEffect(()=>{ catsRef.current     = cats;     },[cats]);
   useEffect(()=>{ wishlistRef.current = wishlist;  },[wishlist]);
   useEffect(()=>{ profilesRef.current = profiles;  },[profiles]);
 
-  // persist: sempre usa refs para cats/wishlist/profiles — nunca closures stale
-  // nextBooks deve ser o array atual (passado pelo caller via setBooks funcional)
-  const persist=async(nextBooks, nextCats, nextWishlist, nextProfiles)=>{
-    const useCats     = nextCats     ?? catsRef.current;
-    const useWishlist = nextWishlist ?? wishlistRef.current;
-    const useProfiles = nextProfiles ?? profilesRef.current;
-
-    const normalizedCats = normalizeCategories(useCats);
+  // persist: zero argumentos — sempre lê das refs, impossível usar snapshot stale
+  const persist=async()=>{
+    const normalizedCats = normalizeCategories(catsRef.current);
     const validSet = new Set(normalizedCats);
 
-    const booksToStore=(nextBooks||[]).map(({_hasNotes,_hasChats,...rest})=>({
+    const booksToStore=(booksRef.current||[]).map(({_hasNotes,_hasChats,...rest})=>({
       ...rest,
       tags: normalizeTags(rest.tags),
       category: validSet.has(normalizeCategory(rest.category)) ? normalizeCategory(rest.category) : ""
@@ -4758,8 +4760,8 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey,
     const data = {
       books:booksToStore,
       categories:normalizedCats,
-      wishlist:normalizeWishlist(useWishlist),
-      profiles:uniqueCaseInsensitive(useProfiles||[])
+      wishlist:normalizeWishlist(wishlistRef.current),
+      profiles:uniqueCaseInsensitive(profilesRef.current||[])
     };
 
     return new Promise((resolve, reject) => {
@@ -4776,7 +4778,7 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey,
     if(profiles.includes(trimmed)) return;
     const next=uniqueCaseInsensitive([...profiles,trimmed]);
     setProfiles(next);
-    await persist(books);
+    await persist();
   };
 
   const bumpStat=async(bookId)=>{
@@ -4919,10 +4921,10 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey,
       // Adiciona livro ao estado imediatamente
       setBooks(prev=>{
         const nb=[...prev,book];
-        // persist em background — não bloqueia UI
-        persist(nb, nextCats).catch(e=>console.error("persist doAdd falhou:",e));
+        booksRef.current=nb; // sincronamente — persist lê isso
         return nb;
       });
+      persist().catch(e=>console.error("persist doAdd falhou:",e));
 
       setUpProg(100);
 
@@ -4948,17 +4950,19 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey,
           setBooks(prev=>{
             if(!prev.find(b=>b.id===bookId)) return prev;
             const nb2=prev.map(b=>b.id===bookId?{...b,synopsis,synopsisStatus:"done"}:b);
-            persist(nb2).catch(e=>console.error("persist sinopse falhou:",e));
+            booksRef.current=nb2;
             return nb2;
           });
+          persist().catch(e=>console.error("persist sinopse done falhou:",e));
           if(selBookRef.current?.id===bookId) setSelBook(p=>p?{...p,synopsis,synopsisStatus:"done"}:p);
         }catch(e){
           console.warn("Sinopse falhou:",e.message);
           setBooks(prev=>{
             const nb2=prev.map(b=>b.id===bookId?{...b,synopsisStatus:"error"}:b);
-            persist(nb2).catch(()=>{});
+            booksRef.current=nb2;
             return nb2;
           });
+          persist().catch(()=>{});
           if(selBookRef.current?.id===bookId) setSelBook(p=>p?{...p,synopsisStatus:"error"}:p);
         }
 
@@ -4972,9 +4976,10 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey,
             setBooks(prev=>{
               if(!prev.find(b=>b.id===bookId)) return prev;
               const nb2=prev.map(b=>b.id===bookId?{...b,embeddingsStatus:"done"}:b);
-              persist(nb2).catch(e=>console.error("persist embeddings falhou:",e));
+              booksRef.current=nb2;
               return nb2;
             });
+            persist().catch(e=>console.error("persist embeddings done falhou:",e));
             if(selBookRef.current?.id===bookId){
               setSelBook(p=>p?{...p,embeddingsStatus:"done"}:p);
               setBookEmbeddings(embs);
@@ -4984,9 +4989,10 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey,
             console.warn("Embeddings falharam:",e.message);
             setBooks(prev=>{
               const nb2=prev.map(b=>b.id===bookId?{...b,embeddingsStatus:"error"}:b);
-              persist(nb2).catch(()=>{});
+              booksRef.current=nb2;
               return nb2;
             });
+            persist().catch(()=>{});
             if(selBookRef.current?.id===bookId) setSelBook(p=>p?{...p,embeddingsStatus:"error"}:p);
           }
         }
@@ -5000,25 +5006,28 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey,
             setBooks(prev=>{
               if(!prev.find(b=>b.id===bookId)) return prev;
               const nb2=prev.map(b=>b.id===bookId?{...b,conceptsStatus:"done"}:b);
-              persist(nb2).catch(e=>console.error("persist conceitos falhou:",e));
+              booksRef.current=nb2;
               return nb2;
             });
+            persist().catch(e=>console.error("persist conceitos done falhou:",e));
             if(selBookRef.current?.id===bookId) setSelBook(p=>p?{...p,conceptsStatus:"done"}:p);
           } else {
             setBooks(prev=>{
               const nb2=prev.map(b=>b.id===bookId?{...b,conceptsStatus:"error"}:b);
-              persist(nb2).catch(()=>{});
+              booksRef.current=nb2;
               return nb2;
             });
+            persist().catch(()=>{});
             if(selBookRef.current?.id===bookId) setSelBook(p=>p?{...p,conceptsStatus:"error"}:p);
           }
         }catch(e){
           console.warn("Conceitos falharam:",e.message);
           setBooks(prev=>{
             const nb2=prev.map(b=>b.id===bookId?{...b,conceptsStatus:"error"}:b);
-            persist(nb2).catch(()=>{});
+            booksRef.current=nb2;
             return nb2;
           });
+          persist().catch(()=>{});
           if(selBookRef.current?.id===bookId) setSelBook(p=>p?{...p,conceptsStatus:"error"}:p);
         }
       }, 500);
@@ -5052,15 +5061,15 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey,
       setSelBook(p => ({...p,...fd, category:finalCategory, tags:nextTags}));
     }
 
-    // Captura o array atualizado para poder await persist fora do setBooks
-    const nb = books.map(b => b.id===targetBook.id
+    const nb = booksRef.current.map(b => b.id===targetBook.id
       ? {...b, title:trimStr(fd.title), author:trimStr(fd.author), category:finalCategory, tags:nextTags}
       : b
     );
+    booksRef.current = nb; // sincronamente — persist() lê isso antes do useEffect rodar
     setBooks(nb);
 
     try{
-      await persist(nb, nextCats);
+      await persist();
       pushToast("Livro atualizado");
     }catch(e){
       console.error("doEdit persist falhou:", e.message);
@@ -5091,11 +5100,12 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey,
       }
     }
 
-    // Filtra o livro e persiste diretamente (bypass da fila para garantir atomicidade)
-    const nb = books.filter(b => b.id !== book.id);
+    // Deriva de booksRef.current (estado real no momento dos awaits acima)
+    const nb = booksRef.current.filter(b => b.id !== book.id);
+    booksRef.current = nb; // sincronamente antes do saveIdx
     setBooks(nb);
 
-    const normalizedCats = normalizeCategories(cats);
+    const normalizedCats = normalizeCategories(catsRef.current);
     const validSet = new Set(normalizedCats);
     const booksToStore = nb.map(({_hasNotes,_hasChats,...rest})=>({
       ...rest,
@@ -5105,8 +5115,8 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey,
     await saveIdx(dirHandle, {
       books: booksToStore,
       categories: normalizedCats,
-      wishlist,
-      profiles
+      wishlist: wishlistRef.current,
+      profiles: profilesRef.current
     });
     console.log("[doDelete] index.json salvo. Livros restantes:", booksToStore.map(b=>b.title));
 
@@ -5198,7 +5208,7 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey,
       setSelectedCategory(validSet.has(nextSelected) ? nextSelected : "");
     }
 
-    await persist(nb,normalized,wishlist,profiles);
+    await persist();
     setModal(null);
     pushToast("Categorias atualizadas");
   };
@@ -5213,7 +5223,7 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey,
       pushToast("Livro adicionado à wishlist");
     }
     setWishlist(nw);
-    await persist(books, null, nw);
+    await persist();
     setWishModal(false);
     setWishEdit(null);
   };
@@ -5221,7 +5231,7 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey,
   const deleteWish=async(id)=>{
     const nw=wishlist.filter(w=>w.id!==id);
     setWishlist(nw);
-    await persist(books, null, nw);
+    await persist();
     pushToast("Livro removido da wishlist");
   };
 
@@ -5260,9 +5270,10 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey,
       setBooks(prev=>{
         if(!prev.find(b=>b.id===fid)) return prev;
         const nb = prev.map(b=>b.id===fid?{...b,embeddingsStatus:"done"}:b);
-        persist(nb,cats,wishlist,profiles);
+        booksRef.current=nb;
         return nb;
       });
+      persist().catch(()=>{});
       setSelBook(p=>p?{...p,embeddingsStatus:"done"}:p);
     }
 
@@ -5298,9 +5309,10 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey,
           setBooks(prev=>{
             if(!prev.find(b=>b.id===fid)) return prev; // livro foi deletado
             const nb=prev.map(b=>b.id===fid?{...b,synopsis,synopsisStatus:"done"}:b);
-            persist(nb,cats,wishlist,profiles);
+            booksRef.current=nb;
             return nb;
           });
+          persist().catch(()=>{});
           setSelBook(p=>p?{...p,synopsis,synopsisStatus:"done"}:p);
         })
         .catch(()=>{
@@ -5330,9 +5342,10 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey,
           setBooks(prev=>{
             if(!prev.find(b=>b.id===fid)) return prev; // livro foi deletado
             const nb=prev.map(b=>b.id===fid?{...b,embeddingsStatus:"done"}:b);
-            persist(nb,cats,wishlist,profiles);
+            booksRef.current=nb;
             return nb;
           });
+          persist().catch(()=>{});
           setSelBook(p=>p?{...p,embeddingsStatus:"done"}:p);
           pushToast("Índice semântico gerado");
         })
@@ -5415,9 +5428,10 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey,
         const b = prev.find(x=>x.id===savedBookId);
         if(!b || b._hasChats) return prev;
         const nb = prev.map(x=>x.id===savedBookId ? {...x,_hasChats:true} : x);
-        persist(nb,cats,wishlist,profiles);
+        booksRef.current=nb;
         return nb;
       });
+      persist().catch(()=>{});
       setSelBook(p=>p?{...p,_hasChats:true}:p);
     }
   };
@@ -5516,7 +5530,7 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey,
       if(statusFixNeeded.length > 0){
         const nb = books.map(b => hasConceptsMap[b.id] ? {...b, conceptsStatus:"done"} : b);
         setBooks(nb);
-        if(nb.length > 0) await persist(nb, cats, wishlist, profiles);
+        if(nb.length > 0) await persist();
       }
 
       const pending = books.filter(b => !hasConceptsMap[b.id]);
@@ -5551,7 +5565,7 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey,
             setBooks(prev=>{
               const activeIds = new Set(prev.map(b=>b.id));
               const filtered = nb.filter(b=>activeIds.has(b.id));
-              persist(filtered, cats, wishlist, profiles);
+              booksRef.current=filtered;
               return filtered;
             });
           }
@@ -5615,9 +5629,10 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey,
         const nb = currentBooks
           .filter(b=>activeIds.has(b.id))
           .map(b=>updatedStatus[b.id] ? {...b, conceptsStatus:"done"} : b);
-        persist(nb, cats, wishlist, profiles);
+        booksRef.current=nb;
         return nb;
       });
+      persist().catch(()=>{});
     }
 
     // Reconstrói índice com todos os livros (usa currentBooks para evitar closure stale)
@@ -6140,9 +6155,10 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey,
               setBooks(prev=>{
                 if(!prev.find(b=>b.id===bookId)) return prev;
                 const nb = prev.map(b=>b.id===bookId?{...b,synopsis,synopsisStatus:"done"}:b);
-                persist(nb,cats,wishlist,profiles);
+                booksRef.current=nb;
                 return nb;
               });
+              persist().catch(()=>{});
               if(selBookRef.current?.id===bookId) setSelBook(p=>p?{...p,synopsis,synopsisStatus:"done"}:p);
             }catch(e){
               console.warn(`[reprocessErrors] sinopse falhou para "${book.title}":`,e.message);
@@ -6160,9 +6176,10 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey,
               setBooks(prev=>{
                 if(!prev.find(b=>b.id===bookId)) return prev;
                 const nb = prev.map(b=>b.id===bookId?{...b,embeddingsStatus:"done"}:b);
-                persist(nb,cats,wishlist,profiles);
+                booksRef.current=nb;
                 return nb;
               });
+              persist().catch(()=>{});
               if(selBookRef.current?.id===bookId){
                 setSelBook(p=>p?{...p,embeddingsStatus:"done"}:p);
                 setBookEmbeddings(embs);
@@ -6184,9 +6201,10 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey,
                 setBooks(prev=>{
                   if(!prev.find(b=>b.id===bookId)) return prev;
                   const nb = prev.map(b=>b.id===bookId?{...b,conceptsStatus:"done"}:b);
-                  persist(nb,cats,wishlist,profiles);
+                  booksRef.current=nb;
                   return nb;
                 });
+                persist().catch(()=>{});
                 if(selBookRef.current?.id===bookId) setSelBook(p=>p?{...p,conceptsStatus:"done"}:p);
               } else {
                 setBooks(prev=>prev.map(b=>b.id===bookId?{...b,conceptsStatus:"error"}:b));
@@ -6223,9 +6241,10 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey,
       setBooks(prev=>{
         if(!prev.find(b=>b.id===book.id)) return prev;
         const nb=prev.map(b=>b.id===book.id?{...b,[statusKey]:s}:b);
-        persist(nb,cats,wishlist,profiles);
+        booksRef.current=nb;
         return nb;
       });
+      persist().catch(()=>{});
       setSelBook(p=>p?{...p,[statusKey]:s}:p);
     };
 
@@ -6237,9 +6256,10 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey,
         setBooks(prev=>{
           if(!prev.find(b=>b.id===book.id)) return prev;
           const nb=prev.map(b=>b.id===book.id?{...b,synopsis,synopsisStatus:"done"}:b);
-          persist(nb,cats,wishlist,profiles);
+          booksRef.current=nb;
           return nb;
         });
+        persist().catch(()=>{});
         setSelBook(p=>p?{...p,synopsis,synopsisStatus:"done"}:p);
         pushToast("Sinopse regenerada");
       }catch(e){
@@ -6275,7 +6295,7 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey,
     const nb=books.map(b=>b.id===bookId ? {...b,_hasNotes:hasNotes} : b);
     setBooks(nb);
     if(selBook?.id===bookId) setSelBook(p=>p?{...p,_hasNotes:hasNotes}:p);
-    if(nb.find(b=>b.id===bookId)) await persist(nb,cats,wishlist,profiles);
+    if(nb.find(b=>b.id===bookId)) await persist();
   };
 
   const globalSuggestionItems = [
