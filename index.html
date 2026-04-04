@@ -1582,45 +1582,82 @@ const sbLb = {
 };
 
 // ─── BookProcessingStatus ─────────────────────────────
-// Mostra status de sinopse, embeddings e conceitos no header do livro.
-// Aparece apenas quando há algo em processing ou error. Some quando tudo done.
+// Deriva um único estado visível do livro a partir dos campos internos.
+// Prioridade: erro > preparando > pronto.
+
+const ERROR_MESSAGES = {
+  synopsisStatus:   "Não foi possível gerar a sinopse",
+  embeddingsStatus: "Não foi possível preparar a busca inteligente",
+  conceptsStatus:   "Não foi possível preparar as ideias principais",
+};
+
+function deriveBookStatus(book){
+  const fields = ["synopsisStatus", "embeddingsStatus", "conceptsStatus"];
+
+  // 1. Prioridade: qualquer erro
+  const errorField = fields.find(f => book[f] === "error");
+  if(errorField) return { state:"atencao", errorKey: errorField };
+
+  // 2. Qualquer campo ainda processando
+  const processing = fields.some(f => book[f] === "processing");
+  if(processing) return { state:"preparando" };
+
+  // 3. Verificar se todos os campos estão "done"
+  const allDone = fields.every(f => book[f] === "done");
+  if(!allDone) return { state:"atencao", errorKey: fields.find(f => book[f] !== "done") };
+
+  // 4. Verificar dado real de synopsis (único dado inline no objeto book)
+  if(!book.synopsis || !book.synopsis.trim())
+    return { state:"atencao", errorKey: "synopsisStatus" };
+
+  // 5. Tudo válido
+  return { state:"pronto" };
+}
 
 function BookProcessingStatus({ book, onRetry }){
-  const items = [
-    { key:"synopsisStatus",   label:"Sinopse" },
-    { key:"conceptsStatus",   label:"Conceitos" },
-  ];
-  const relevant = items.filter(it => book[it.key] === "processing" || book[it.key] === "error");
-  if(!relevant.length) return null;
+  const status = deriveBookStatus(book);
+
+  const isError = status.state === "atencao";
+  const isPrep  = status.state === "preparando";
+  const isDone  = status.state === "pronto";
+
+  const bg    = isError ? "rgba(122,30,30,.08)"
+              : isPrep  ? "rgba(122,90,26,.08)"
+              :            "rgba(30,116,76,.07)";
+  const color = isError ? "#7a1e1e"
+              : isPrep  ? "#7a5a1a"
+              :            "#1a6b42";
+  const brd   = isError ? "rgba(122,30,30,.28)"
+              : isPrep  ? "rgba(122,90,26,.25)"
+              :            "rgba(30,116,76,.25)";
+
+  const errorMsg = isError
+    ? (ERROR_MESSAGES[status.errorKey] || "Não foi possível preparar este livro")
+    : null;
 
   return(
-    <div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
-      {relevant.map(it=>{
-        const isProcessing = book[it.key] === "processing";
-        const isError      = book[it.key] === "error";
-        return(
-          <span key={it.key} style={{
-            display:"flex",alignItems:"center",gap:5,
-            fontSize:11,padding:"2px 9px",borderRadius:10,fontWeight:600,
-            background: isError ? "rgba(122,30,30,.08)" : "rgba(122,90,26,.08)",
-            color: isError ? "#7a1e1e" : "#7a5a1a",
-            border: `1px solid ${isError ? "rgba(122,30,30,.28)" : "rgba(122,90,26,.25)"}`
-          }}>
-            {isProcessing && <span style={{animation:"bob .9s infinite"}}>⟳</span>}
-            {isError && "✗"}
-            {" "}{it.label}
-            {isError && (
-              <button
-                onClick={()=>onRetry(it.key)}
-                style={{background:"none",border:"none",cursor:"pointer",color:"#2d6be4",fontSize:11,fontWeight:700,padding:"0 0 0 4px",textDecoration:"underline"}}
-              >
-                Retry
-              </button>
-            )}
-          </span>
-        );
-      })}
-    </div>
+    <span style={{
+      display:"inline-flex", alignItems:"center", gap:5,
+      fontSize:11, padding:"2px 9px", borderRadius:10, fontWeight:600,
+      background:bg, color, border:`1px solid ${brd}`,
+      whiteSpace:"nowrap"
+    }}>
+      {isPrep && <span style={{animation:"bob .9s infinite"}}>⟳</span>}
+      {isPrep && "Preparando o livro"}
+      {isDone && "Livro pronto para perguntas"}
+      {isError && (
+        <>
+          {errorMsg}
+          {" · "}
+          <button
+            onClick={()=>onRetry(status.errorKey)}
+            style={{background:"none",border:"none",cursor:"pointer",color:"#2d6be4",fontSize:11,fontWeight:700,padding:0,textDecoration:"underline"}}
+          >
+            Tentar novamente
+          </button>
+        </>
+      )}
+    </span>
   );
 }
 
@@ -3355,11 +3392,11 @@ function HomePage({
 
 // ─── Setup ────────────────────────────────────────────
 
-function Setup({onReady}){
-  const [apiKey,setKey]=useState(()=>localStorage.getItem("mynd_apikey") || "");
-  const [openaiKey,setOpenaiKey]=useState(()=>localStorage.getItem("mynd_openai_apikey") || "");
-  const [dir,setDir]=useState(null);
-  const [dirName,setDirName]=useState("");
+function Setup({onReady, savedProfiles=[], currentDir=null, currentDirName="", currentApiKey="", currentOpenaiKey=""}){
+  const [apiKey,setKey]=useState(()=>currentApiKey || localStorage.getItem("mynd_apikey") || "");
+  const [openaiKey,setOpenaiKey]=useState(()=>currentOpenaiKey || localStorage.getItem("mynd_openai_apikey") || "");
+  const [dir,setDir]=useState(()=>currentDir || null);
+  const [dirName,setDirName]=useState(()=>currentDirName || "");
   const [profile,setProfile]=useState(()=>localStorage.getItem("mynd_user") || "");
   const [err,setErr]=useState("");
 
@@ -3415,10 +3452,28 @@ function Setup({onReady}){
 
         <div style={{background:C.surf,border:`1px solid ${C.border}`,borderRadius:12,padding:28,display:"flex",flexDirection:"column",gap:22}}>
           <div>
-            <div style={{...lb,marginBottom:8}}>Nome do perfil</div>
+            <div style={{...lb,marginBottom:8}}>Perfil</div>
+            {savedProfiles.length > 0 && (
+              <div style={{display:"flex",flexWrap:"wrap",gap:6,marginBottom:10}}>
+                {savedProfiles.map(p=>(
+                  <button
+                    key={p}
+                    type="button"
+                    onClick={()=>setProfile(p)}
+                    style={{
+                      padding:"5px 13px",borderRadius:20,fontSize:13,fontWeight:600,cursor:"pointer",
+                      border:`1px solid ${profile===p ? C.accentBrd : C.border}`,
+                      background: profile===p ? "rgba(45,107,228,.08)" : C.surf,
+                      color: profile===p ? C.accent : C.inkD,
+                      transition:"border-color .15s,background .15s,color .15s"
+                    }}
+                  >{p}</button>
+                ))}
+              </div>
+            )}
             <input
               style={fi}
-              placeholder="Digite o nome do perfil"
+              placeholder="Novo perfil ou selecione acima"
               value={profile}
               onChange={e=>setProfile(e.target.value)}
             />
@@ -3886,12 +3941,10 @@ function Sidebar({
                   <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap",minWidth:0}}>
                     {b.category && <div style={{fontSize:10,color:C.sbInkF}}>{b.category}</div>}
                     {b._hasNotes && <div style={{fontSize:10,color:"#c7e4ff"}}>Notas</div>}
-                    {(b.synopsisStatus==="processing"||b.embeddingsStatus==="processing"||b.conceptsStatus==="processing") && (
-                      <div style={{fontSize:10,color:"#c4962a",animation:"bob .9s infinite"}}>⟳</div>
-                    )}
-                    {(b.synopsisStatus==="error"||b.embeddingsStatus==="error"||b.conceptsStatus==="error") && (
-                      <div style={{fontSize:10,color:"#e07070"}}>✗</div>
-                    )}
+                    {(()=>{ const _b = (selBook?.id===b.id ? selBook : b); const _s = deriveBookStatus(_b).state; return(<>
+                      {_s === "preparando" && <div style={{fontSize:10,color:"#c4962a",animation:"bob .9s infinite"}}>⟳</div>}
+                      {_s === "atencao"    && <div style={{fontSize:10,color:"#e07070"}}>✗</div>}
+                    </>); })()}
                   </div>
 
                   <div style={{display:"flex",gap:4,flexShrink:0}}>
@@ -4440,7 +4493,7 @@ function ConversasInsights({ chatSessions, insights, selBook, activeChatId, user
 
 // ─── Library ──────────────────────────────────────────
 
-function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}){
+function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey, onLogoff}){
   const [books,setBooks] = useState([]);
   const [cats,setCats] = useState([...DEF_CATS]);
   const [profiles,setProfiles] = useState([]);
@@ -4554,7 +4607,60 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
         };
       });
 
-      setBooks(booksWithMeta);
+      // ── Reconciliação bidirecional de status no bootstrap ──
+      // Verifica dados reais e corrige status em ambas as direções sem chamar APIs.
+      const reconciledBooks = await (async () => {
+        const corrected = await Promise.all(booksWithMeta.map(async book => {
+          let patch = {};
+
+          // synopsis: dado inline — sobe para "done" se válido, desce para "pending" se não
+          if(book.synopsis && book.synopsis.trim()){
+            if(book.synopsisStatus !== "done") patch.synopsisStatus = "done";
+          } else {
+            if(book.synopsisStatus === "done") patch.synopsisStatus = "pending";
+          }
+
+          // embeddings: verifica arquivo real em ambas as direções
+          try{
+            const embs = await loadEmbeddings(dirHandle, book.id);
+            if(embs && embs.length){
+              if(book.embeddingsStatus !== "done") patch.embeddingsStatus = "done";
+            } else {
+              if(book.embeddingsStatus === "done") patch.embeddingsStatus = "pending";
+            }
+          }catch{
+            if(book.embeddingsStatus === "done") patch.embeddingsStatus = "pending";
+          }
+
+          // concepts: verifica arquivo real em ambas as direções
+          try{
+            const concepts = await loadBookConcepts(dirHandle, book.id);
+            if(concepts && concepts.length){
+              if(book.conceptsStatus !== "done") patch.conceptsStatus = "done";
+            } else {
+              if(book.conceptsStatus === "done") patch.conceptsStatus = "pending";
+            }
+          }catch{
+            if(book.conceptsStatus === "done") patch.conceptsStatus = "pending";
+          }
+
+          return Object.keys(patch).length ? {...book, ...patch} : book;
+        }));
+
+        const changed = corrected.some((b,i) =>
+          b.synopsisStatus  !== booksWithMeta[i].synopsisStatus  ||
+          b.embeddingsStatus !== booksWithMeta[i].embeddingsStatus ||
+          b.conceptsStatus  !== booksWithMeta[i].conceptsStatus
+        );
+
+        if(changed){
+          persist(corrected, idx.categories || [...DEF_CATS], idx.wishlist || [], idx.profiles || []);
+        }
+
+        return corrected;
+      })();
+
+      setBooks(reconciledBooks);
       setCats(idx.categories || [...DEF_CATS]);
       setWishlist(idx.wishlist || []);
       setProfiles(idx.profiles || []);
@@ -5070,6 +5176,18 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
     // Carregar embeddings salvos (se existirem)
     const embs = await loadEmbeddings(dirHandle, freshBook.id);
     setBookEmbeddings(embs);
+
+    // Reconciliação silenciosa: arquivo existe mas status não reflete isso
+    if(embs && embs.length && freshBook.embeddingsStatus !== "done"){
+      const fid = freshBook.id;
+      setBooks(prev=>{
+        if(!prev.find(b=>b.id===fid)) return prev;
+        const nb = prev.map(b=>b.id===fid?{...b,embeddingsStatus:"done"}:b);
+        persist(nb,cats,wishlist,profiles);
+        return nb;
+      });
+      setSelBook(p=>p?{...p,embeddingsStatus:"done"}:p);
+    }
 
     // Verificar se PDF original está disponível
     const deepAvailable = await rf(dirHandle,`${freshBook.id}.pdf`);
@@ -5979,10 +6097,8 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
     }
   };
 
-  const handleLogoff=async()=>{
-    if(!confirm("Trocar de perfil? Suas chaves e pasta permanecem salvas.")) return;
-    localStorage.removeItem("mynd_user");
-    window.location.reload();
+  const handleLogoff=()=>{
+    onLogoff?.();
   };
 
   const handleRetry=async(statusKey)=>{
@@ -6155,23 +6271,6 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
                     }
                   </span>
 
-                  {/* Badge de índice semântico — baseado exclusivamente em embeddingsStatus */}
-                  {selBook.embeddingsStatus === "processing" && (
-                    <>
-                      <span style={{fontSize:12,color:C.inkF}}>•</span>
-                      <span style={{fontSize:11,padding:"2px 8px",borderRadius:10,background:"rgba(122,90,26,.08)",color:C.gold,border:`1px solid ${C.goldBrd}`,fontWeight:600,display:"flex",alignItems:"center",gap:4}}>
-                        <span style={{animation:"bob .9s infinite"}}>⟳</span> Preparando busca semântica…
-                      </span>
-                    </>
-                  )}
-                  {selBook.embeddingsStatus === "done" && (
-                    <>
-                      <span style={{fontSize:12,color:C.inkF}}>•</span>
-                      <span style={{fontSize:11,padding:"2px 8px",borderRadius:10,background:"rgba(30,92,46,.1)",color:"#1e5c2e",border:"1px solid rgba(30,92,46,.22)",fontWeight:600,display:"flex",alignItems:"center",gap:4}}>
-                        <Ico d={D.check} sz={11} col="#1e5c2e"/> Índice semântico ativo
-                      </span>
-                    </>
-                  )}
                   <BookProcessingStatus book={selBook} onRetry={handleRetry}/>
                 </div>
               </div>
@@ -6465,14 +6564,12 @@ function Root(){
           setKey(k.trim());
           setOpenaiKey(oaik.trim());
           if(!savedUser){
-            // Carrega perfis salvos do index para mostrar seleção
             try{
               const idxTxt = await rf(dh,"index.json");
               const idx = idxTxt ? JSON.parse(idxTxt) : {};
-              const profiles = uniqueCaseInsensitive(idx?.profiles || []);
-              setSavedProfiles(profiles);
+              setSavedProfiles(uniqueCaseInsensitive(idx?.profiles || []));
             }catch{ setSavedProfiles([]); }
-            setPhase("profile_select");
+            setPhase("setup");
             return;
           }
           setUser(savedUser);
@@ -6551,70 +6648,14 @@ function Root(){
     );
   }
 
-  if(phase==="profile_select"){
-    const [draft, setDraft] = React.useState("");
-    const enter = (name) => {
-      const trimmed = (name||"").trim();
-      if(!trimmed) return;
-      localStorage.setItem("mynd_user", trimmed);
-      setUser(trimmed);
-      setPhase("app");
-    };
-    return(
-      <div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",background:C.bg,padding:40}}>
-        <div style={{textAlign:"center",maxWidth:400}}>
-          <div style={{fontSize:28,color:C.ink,marginBottom:6,fontWeight:700}}>Bem-vindo de volta</div>
-          <p style={{fontSize:15,color:C.inkF,lineHeight:1.7,marginBottom:28}}>Escolha um perfil ou entre com um novo nome.</p>
-
-          {savedProfiles.length > 0 && (
-            <div style={{display:"flex",flexDirection:"column",gap:8,marginBottom:24}}>
-              {savedProfiles.map(p=>(
-                <button
-                  key={p}
-                  onClick={()=>enter(p)}
-                  style={{
-                    width:"100%",padding:"12px 18px",borderRadius:8,border:`1px solid ${C.border}`,
-                    background:C.surf,cursor:"pointer",fontSize:15,fontWeight:600,color:C.ink,
-                    display:"flex",alignItems:"center",gap:10,transition:"border-color .15s,box-shadow .15s"
-                  }}
-                  onMouseEnter={e=>{ e.currentTarget.style.borderColor=C.accentBrd; e.currentTarget.style.boxShadow=`0 2px 12px rgba(45,107,228,.1)`; }}
-                  onMouseLeave={e=>{ e.currentTarget.style.borderColor=C.border; e.currentTarget.style.boxShadow="none"; }}
-                >
-                  <span style={{width:32,height:32,borderRadius:"50%",background:C.accent,color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700,fontSize:14,flexShrink:0}}>
-                    {p.charAt(0).toUpperCase()}
-                  </span>
-                  {p}
-                </button>
-              ))}
-            </div>
-          )}
-
-          <div style={{display:"flex",gap:8}}>
-            <input
-              value={draft}
-              onChange={e=>setDraft(e.target.value)}
-              onKeyDown={e=>{ if(e.key==="Enter") enter(draft); }}
-              placeholder="Novo perfil…"
-              style={{flex:1,background:C.surf,border:`1px solid ${C.border}`,borderRadius:7,padding:"10px 12px",color:C.ink,fontSize:14,outline:"none"}}
-            />
-            <button onClick={()=>enter(draft)} disabled={!draft.trim()} style={{...bP(!draft.trim()),padding:"10px 18px"}}>
-              Entrar
-            </button>
-          </div>
-
-          <button onClick={()=>{ setPhase("setup"); }} style={{...bG,marginTop:16,fontSize:13,width:"100%"}}>
-            Trocar pasta ou chaves
-          </button>
-        </div>
-      </div>
-    );
-  }
+  // profile_select unificado em setup
+  if(phase==="profile_select") setPhase("setup");
 
   if(phase==="setup"){
-    return <Setup onReady={(dh,k,name,oaik)=>{ setDir(dh); setKey(k); setUser(name); setOpenaiKey(oaik||""); setPhase("app"); }} />;
+    return <Setup onReady={(dh,k,name,oaik)=>{ setDir(dh); setKey(k); setUser(name); setOpenaiKey(oaik||""); setPhase("app"); }} savedProfiles={savedProfiles} currentDir={dirHandle} currentDirName={dirHandle?.name||""} currentApiKey={apiKey} currentOpenaiKey={openaiKey}/>;
   }
 
-  return <Library dirHandle={dirHandle} apiKey={apiKey} userName={userName} openaiKey={openaiKey}/>;
+  return <Library dirHandle={dirHandle} apiKey={apiKey} userName={userName} openaiKey={openaiKey} onLogoff={()=>setPhase("setup")}/>;
 }
 
 ReactDOM.createRoot(document.getElementById("root")).render(<Root/>);
