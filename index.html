@@ -1606,9 +1606,18 @@ function deriveBookStatus(book){
   const errorField = fields.find(f => book[f] === "error");
   if(errorField) return { state:"atencao", errorKey: errorField };
 
-  // 2. Qualquer campo ainda processando ou pendente (livro recém adicionado)
-  const processing = fields.some(f => book[f] === "processing" || book[f] === "pending");
-  if(processing) return { state:"preparando" };
+  // 2. Qualquer campo em processamento ativo
+  const isProcessing = fields.some(f => book[f] === "processing");
+  if(isProcessing) return { state:"preparando" };
+
+  // "pending" = job nunca iniciou ou foi interrompido = atenção (não "preparando" eterno)
+  // Exceção: embeddingsStatus pode ser "pending" se não há openaiKey (sem problema)
+  const hasPending = fields.some(f => book[f] === "pending" && f !== "embeddingsStatus");
+  const hasEmbPending = book.embeddingsStatus === "pending";
+  if(hasPending) return { state:"atencao", errorKey: fields.find(f => book[f] === "pending" && f !== "embeddingsStatus") };
+  // embeddingsStatus pending sem os outros = ok se resto estiver done
+  if(hasEmbPending && book.synopsisStatus === "done" && book.conceptsStatus === "done")
+    return { state:"pronto" }; // sem openaiKey, embeddings não processam mas livro é usável
 
   // 3. Verificar se todos os campos estão "done"
   const allDone = fields.every(f => book[f] === "done");
@@ -4656,7 +4665,7 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey,
           if(book.synopsis && book.synopsis.trim()){
             if(book.synopsisStatus !== "done") patch.synopsisStatus = "done";
           } else {
-            if(book.synopsisStatus === "done") patch.synopsisStatus = "pending";
+            if(book.synopsisStatus === "done") patch.synopsisStatus = "error";
           }
 
           // embeddings: verifica arquivo real em ambas as direções
@@ -4665,10 +4674,10 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey,
             if(embs && embs.length){
               if(book.embeddingsStatus !== "done") patch.embeddingsStatus = "done";
             } else {
-              if(book.embeddingsStatus === "done") patch.embeddingsStatus = "pending";
+              if(book.embeddingsStatus === "done") patch.embeddingsStatus = "error";
             }
           }catch{
-            if(book.embeddingsStatus === "done") patch.embeddingsStatus = "pending";
+            if(book.embeddingsStatus === "done") patch.embeddingsStatus = "error";
           }
 
           // concepts: verifica arquivo real em ambas as direções
@@ -4677,10 +4686,10 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey,
             if(concepts && concepts.length){
               if(book.conceptsStatus !== "done") patch.conceptsStatus = "done";
             } else {
-              if(book.conceptsStatus === "done") patch.conceptsStatus = "pending";
+              if(book.conceptsStatus === "done") patch.conceptsStatus = "error";
             }
           }catch{
-            if(book.conceptsStatus === "done") patch.conceptsStatus = "pending";
+            if(book.conceptsStatus === "done") patch.conceptsStatus = "error";
           }
 
           return Object.keys(patch).length ? {...book, ...patch} : book;
@@ -4692,19 +4701,26 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey,
           b.conceptsStatus  !== booksWithMeta[i].conceptsStatus
         );
 
-        if(changed){
-          booksRef.current=corrected;
-        }
-
         return corrected;
       })();
 
       setBooks(reconciledBooks);
-      booksRef.current = reconciledBooks; // garante ref atualizada antes do persist abaixo
+      booksRef.current = reconciledBooks;
       setCats(idx.categories || [...DEF_CATS]);
       setWishlist(idx.wishlist || []);
       setProfiles(idx.profiles || []);
       setStats(st);
+
+      // Persiste correções de status da reconciliação se houve mudança
+      const hadStatusChange = reconciledBooks.some((b,i) => {
+        const orig = (idx.books||[]).find(x=>x.id===b.id);
+        return orig && (
+          b.synopsisStatus !== orig.synopsisStatus ||
+          b.embeddingsStatus !== orig.embeddingsStatus ||
+          b.conceptsStatus !== orig.conceptsStatus
+        );
+      });
+      if(hadStatusChange) persist().catch(()=>{});
 
       // Carrega insights do perfil atual
       const ins = await loadInsights(dirHandle, initUser);
@@ -4903,9 +4919,9 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey,
         tags:normalizeTags(fd.tags),
         pages,
         synopsis: null,
-        synopsisStatus: "pending",
-        embeddingsStatus: openaiKey ? "pending" : "done",
-        conceptsStatus: "pending",
+        synopsisStatus: "processing",
+        embeddingsStatus: openaiKey ? "processing" : "done",
+        conceptsStatus: "processing",
         addedAt:new Date().toISOString(),
         _hasNotes:false,
         _hasChats:false
@@ -5122,20 +5138,8 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey,
     localStorage.removeItem(`mynd_lastChat_${book.id}`);
     pushToast("Livro excluído");
 
-    // ── 2. Persistir index imediatamente com livro removido ──
-    const normalizedCats = normalizeCategories(catsRef.current);
-    const validSet = new Set(normalizedCats);
-    const booksToStore = nb.map(({_hasNotes,_hasChats,...rest})=>({
-      ...rest,
-      tags: normalizeTags(rest.tags),
-      category: validSet.has(normalizeCategory(rest.category)) ? normalizeCategory(rest.category) : ""
-    }));
-    await saveIdx(dirHandle, {
-      books: booksToStore,
-      categories: normalizedCats,
-      wishlist: wishlistRef.current,
-      profiles: profilesRef.current
-    });
+    // ── 2. Persistir via fila — garante ordem correta mesmo com jobs em andamento ──
+    await persist();
 
     // ── 3. Limpeza de arquivos em background (não bloqueia UI) ──
     const cleanup = async () => {
@@ -5493,13 +5497,13 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey,
 
     // Se já tem índice em memória e não há novos livros sem conceitos, exibe direto
     const alreadyLoaded = Object.keys(conceptsIndex).length > 0;
-    const allDone = books.every(b => b.conceptsStatus === "done");
+    const allDone = booksRef.current.every(b => b.conceptsStatus === "done");
 
     // Verifica se todos os livros atuais estão representados no índice em memória
     const indexedBookIds = new Set(
       Object.values(conceptsIndex).flatMap(e => e.books || [])
     );
-    const allBooksIndexed = books.every(b => indexedBookIds.has(b.id));
+    const allBooksIndexed = booksRef.current.every(b => indexedBookIds.has(b.id));
 
     if(alreadyLoaded && allDone && allBooksIndexed){
       return; // tudo em memória e consistente, nada a fazer
@@ -5509,14 +5513,15 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey,
 
     try{
       // Carrega textos e embeddings globais se ainda não carregados
+      const liveBooks = booksRef.current;
       if(!globalTexts){
         const t={};
-        for(const b of books) t[b.id]=await rf(dirHandle,`${b.id}.txt`) || "";
+        for(const b of liveBooks) t[b.id]=await rf(dirHandle,`${b.id}.txt`) || "";
         setGlobalTexts(t);
       }
       if(!globalEmbeddings){
         const embMap={};
-        await Promise.all(books.map(async b=>{
+        await Promise.all(liveBooks.map(async b=>{
           const embs = await loadEmbeddings(dirHandle, b.id);
           if(embs) embMap[b.id] = embs;
         }));
@@ -5528,20 +5533,21 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey,
 
       // Detecta livros pendentes com Promise.all antes de filtrar
       const hasConceptsMap = {};
-      await Promise.all(books.map(async b=>{
+      await Promise.all(liveBooks.map(async b=>{
         const concepts = await loadBookConcepts(dirHandle, b.id);
         hasConceptsMap[b.id] = concepts.length > 0;
       }));
 
       // Corrige status de livros que já têm arquivo mas status desatualizado
-      const statusFixNeeded = books.filter(b => b.conceptsStatus !== "done" && hasConceptsMap[b.id]);
+      const statusFixNeeded = liveBooks.filter(b => b.conceptsStatus !== "done" && hasConceptsMap[b.id]);
       if(statusFixNeeded.length > 0){
-        const nb = books.map(b => hasConceptsMap[b.id] ? {...b, conceptsStatus:"done"} : b);
+        const nb = liveBooks.map(b => hasConceptsMap[b.id] ? {...b, conceptsStatus:"done"} : b);
+        booksRef.current = nb;
         setBooks(nb);
-        if(nb.length > 0) await persist();
+        await persist();
       }
 
-      const pending = books.filter(b => !hasConceptsMap[b.id]);
+      const pending = liveBooks.filter(b => !hasConceptsMap[b.id]);
 
       if(pending.length > 0){
         setConceptsLoading(false);
@@ -5551,7 +5557,7 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey,
           setConceptsIndex(partialIndex);
 
           const updatedStatus = {};
-          const currentBooks = [...books];
+          const currentBooks = [...booksRef.current];
 
           for(const book of pending){
             try{
@@ -5587,7 +5593,7 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey,
 
       } else {
         // Nenhum livro pendente — reconstrói sempre para garantir IDs atuais
-        const index = await rebuildConceptsIndex(dirHandle, books, apiKey, existing);
+        const index = await rebuildConceptsIndex(dirHandle, liveBooks, apiKey, existing);
         setConceptsIndex(index);
       }
     }catch(e){
