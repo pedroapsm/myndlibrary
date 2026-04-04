@@ -687,22 +687,27 @@ async function extractConceptsForBook(bookId, bookText, bookTitle, apiKey){
 
   const combinedText = blocks.join("\n\n---\n\n").slice(0, 28000); // limite seguro de tokens
 
-  const system = `Você é um assistente especializado em análise de livros. Extraia os conceitos mais importantes do texto fornecido.
+  const system = `Você é um assistente especializado em análise conceitual de livros. Extraia conceitos abstratos, reutilizáveis e transferíveis do texto fornecido.
 
 REGRAS OBRIGATÓRIAS:
 - Retorne entre ${CONCEPTS_PER_BOOK_MIN} e ${CONCEPTS_PER_BOOK_MAX} conceitos
-- Foque em conceitos relevantes: temas, ideias, mecanismos, frameworks
-- Evite palavras genéricas: "história", "pessoas", "coisas", "mundo"
-- Evite nomes próprios, a menos que representem um conceito claro
+- Extraia apenas conceitos abstratos que façam sentido FORA do contexto específico deste livro
+- O conceito deve ser transferível: deve poder aparecer em outros livros de temas diferentes
+- Prefira substantivos ou expressões conceituais curtas (1 a 3 palavras)
+- Aceite 2 ou 3 palavras apenas quando formarem um conceito real e reconhecível: "viés cognitivo", "controle civil", "poder simbólico"
+- Evite palavras genéricas: "história", "pessoas", "coisas", "mundo", "situação"
+- Evite nomes próprios, cargos, países ou eventos específicos
+- Evite formulações narrativas, descritivas ou situacionais: não extraia conclusões de caso, manchetes, problemas pontuais ou acontecimentos
+- Rejeite qualquer item que pareça um insight, uma frase de efeito ou uma descrição de episódio
 - Evite duplicações e variações do mesmo conceito
-- Prefira conceitos reutilizáveis entre livros
-- Cada conceito deve ter 1 a 3 palavras
 - Use SEMPRE português (PT-BR), mesmo que o texto esteja em outro idioma
-- Use lowercase
-- Evite plural desnecessário
+- Use lowercase, evite plural desnecessário
 - Unifique variações: "political propaganda" → "propaganda"
 
-Retorne APENAS um array JSON válido de strings. Exemplo: ["poder", "liderança", "narrativa"]
+EXEMPLOS ACEITOS: liderança, poder, controle civil, transparência, governança, legitimidade, autoconsciência, viés cognitivo, influência, poder simbólico
+EXEMPLOS REJEITADOS: avisos ignorados, risco não comunicado, preparação presidencial, falha de liderança, resposta à emergência
+
+Retorne APENAS um array JSON válido de strings. Exemplo: ["poder", "liderança", "governança"]
 Nenhum texto adicional, nenhum markdown.`;
 
   const response = await callClaude(
@@ -1586,12 +1591,13 @@ const sbLb = {
 // Prioridade: erro > preparando > pronto.
 
 const ERROR_MESSAGES = {
-  synopsisStatus:  "Não foi possível gerar a sinopse",
-  conceptsStatus:  "Não foi possível preparar as ideias principais",
+  synopsisStatus:   "Não foi possível gerar a sinopse",
+  embeddingsStatus: "Não foi possível preparar a busca inteligente",
+  conceptsStatus:   "Não foi possível preparar as ideias principais",
 };
 
 function deriveBookStatus(book){
-  const fields = ["synopsisStatus", "conceptsStatus"];
+  const fields = ["synopsisStatus", "embeddingsStatus", "conceptsStatus"];
 
   // 1. Prioridade: qualquer erro
   const errorField = fields.find(f => book[f] === "error");
@@ -3363,11 +3369,11 @@ function HomePage({
 
 // ─── Setup ────────────────────────────────────────────
 
-function Setup({onReady}){
-  const [apiKey,setKey]=useState(()=>localStorage.getItem("mynd_apikey") || "");
-  const [openaiKey,setOpenaiKey]=useState(()=>localStorage.getItem("mynd_openai_apikey") || "");
-  const [dir,setDir]=useState(null);
-  const [dirName,setDirName]=useState("");
+function Setup({onReady, savedProfiles=[], currentDir=null, currentDirName="", currentApiKey="", currentOpenaiKey=""}){
+  const [apiKey,setKey]=useState(()=>currentApiKey || localStorage.getItem("mynd_apikey") || "");
+  const [openaiKey,setOpenaiKey]=useState(()=>currentOpenaiKey || localStorage.getItem("mynd_openai_apikey") || "");
+  const [dir,setDir]=useState(()=>currentDir || null);
+  const [dirName,setDirName]=useState(()=>currentDirName || "");
   const [profile,setProfile]=useState(()=>localStorage.getItem("mynd_user") || "");
   const [err,setErr]=useState("");
 
@@ -3423,10 +3429,28 @@ function Setup({onReady}){
 
         <div style={{background:C.surf,border:`1px solid ${C.border}`,borderRadius:12,padding:28,display:"flex",flexDirection:"column",gap:22}}>
           <div>
-            <div style={{...lb,marginBottom:8}}>Nome do perfil</div>
+            <div style={{...lb,marginBottom:8}}>Perfil</div>
+            {savedProfiles.length > 0 && (
+              <div style={{display:"flex",flexWrap:"wrap",gap:6,marginBottom:10}}>
+                {savedProfiles.map(p=>(
+                  <button
+                    key={p}
+                    type="button"
+                    onClick={()=>setProfile(p)}
+                    style={{
+                      padding:"5px 13px",borderRadius:20,fontSize:13,fontWeight:600,cursor:"pointer",
+                      border:`1px solid ${profile===p ? C.accentBrd : C.border}`,
+                      background: profile===p ? "rgba(45,107,228,.08)" : C.surf,
+                      color: profile===p ? C.accent : C.inkD,
+                      transition:"border-color .15s,background .15s,color .15s"
+                    }}
+                  >{p}</button>
+                ))}
+              </div>
+            )}
             <input
               style={fi}
-              placeholder="Digite o nome do perfil"
+              placeholder="Novo perfil ou selecione acima"
               value={profile}
               onChange={e=>setProfile(e.target.value)}
             />
@@ -4448,7 +4472,7 @@ function ConversasInsights({ chatSessions, insights, selBook, activeChatId, user
 
 // ─── Library ──────────────────────────────────────────
 
-function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}){
+function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey, onLogoff}){
   const [books,setBooks] = useState([]);
   const [cats,setCats] = useState([...DEF_CATS]);
   const [profiles,setProfiles] = useState([]);
@@ -5862,10 +5886,8 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
     }
   };
 
-  const handleLogoff=async()=>{
-    if(!confirm("Trocar de perfil? Suas chaves e pasta permanecem salvas.")) return;
-    localStorage.removeItem("mynd_user");
-    window.location.reload();
+  const handleLogoff=()=>{
+    onLogoff?.();
   };
 
   const handleRetry=async(statusKey)=>{
@@ -6346,14 +6368,12 @@ function Root(){
           setKey(k.trim());
           setOpenaiKey(oaik.trim());
           if(!savedUser){
-            // Carrega perfis salvos do index para mostrar seleção
             try{
               const idxTxt = await rf(dh,"index.json");
               const idx = idxTxt ? JSON.parse(idxTxt) : {};
-              const profiles = uniqueCaseInsensitive(idx?.profiles || []);
-              setSavedProfiles(profiles);
+              setSavedProfiles(uniqueCaseInsensitive(idx?.profiles || []));
             }catch{ setSavedProfiles([]); }
-            setPhase("profile_select");
+            setPhase("setup");
             return;
           }
           setUser(savedUser);
@@ -6432,70 +6452,14 @@ function Root(){
     );
   }
 
-  if(phase==="profile_select"){
-    const [draft, setDraft] = React.useState("");
-    const enter = (name) => {
-      const trimmed = (name||"").trim();
-      if(!trimmed) return;
-      localStorage.setItem("mynd_user", trimmed);
-      setUser(trimmed);
-      setPhase("app");
-    };
-    return(
-      <div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",background:C.bg,padding:40}}>
-        <div style={{textAlign:"center",maxWidth:400}}>
-          <div style={{fontSize:28,color:C.ink,marginBottom:6,fontWeight:700}}>Bem-vindo de volta</div>
-          <p style={{fontSize:15,color:C.inkF,lineHeight:1.7,marginBottom:28}}>Escolha um perfil ou entre com um novo nome.</p>
-
-          {savedProfiles.length > 0 && (
-            <div style={{display:"flex",flexDirection:"column",gap:8,marginBottom:24}}>
-              {savedProfiles.map(p=>(
-                <button
-                  key={p}
-                  onClick={()=>enter(p)}
-                  style={{
-                    width:"100%",padding:"12px 18px",borderRadius:8,border:`1px solid ${C.border}`,
-                    background:C.surf,cursor:"pointer",fontSize:15,fontWeight:600,color:C.ink,
-                    display:"flex",alignItems:"center",gap:10,transition:"border-color .15s,box-shadow .15s"
-                  }}
-                  onMouseEnter={e=>{ e.currentTarget.style.borderColor=C.accentBrd; e.currentTarget.style.boxShadow=`0 2px 12px rgba(45,107,228,.1)`; }}
-                  onMouseLeave={e=>{ e.currentTarget.style.borderColor=C.border; e.currentTarget.style.boxShadow="none"; }}
-                >
-                  <span style={{width:32,height:32,borderRadius:"50%",background:C.accent,color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700,fontSize:14,flexShrink:0}}>
-                    {p.charAt(0).toUpperCase()}
-                  </span>
-                  {p}
-                </button>
-              ))}
-            </div>
-          )}
-
-          <div style={{display:"flex",gap:8}}>
-            <input
-              value={draft}
-              onChange={e=>setDraft(e.target.value)}
-              onKeyDown={e=>{ if(e.key==="Enter") enter(draft); }}
-              placeholder="Novo perfil…"
-              style={{flex:1,background:C.surf,border:`1px solid ${C.border}`,borderRadius:7,padding:"10px 12px",color:C.ink,fontSize:14,outline:"none"}}
-            />
-            <button onClick={()=>enter(draft)} disabled={!draft.trim()} style={{...bP(!draft.trim()),padding:"10px 18px"}}>
-              Entrar
-            </button>
-          </div>
-
-          <button onClick={()=>{ setPhase("setup"); }} style={{...bG,marginTop:16,fontSize:13,width:"100%"}}>
-            Trocar pasta ou chaves
-          </button>
-        </div>
-      </div>
-    );
-  }
+  // profile_select unificado em setup
+  if(phase==="profile_select") setPhase("setup");
 
   if(phase==="setup"){
-    return <Setup onReady={(dh,k,name,oaik)=>{ setDir(dh); setKey(k); setUser(name); setOpenaiKey(oaik||""); setPhase("app"); }} />;
+    return <Setup onReady={(dh,k,name,oaik)=>{ setDir(dh); setKey(k); setUser(name); setOpenaiKey(oaik||""); setPhase("app"); }} savedProfiles={savedProfiles} currentDir={dirHandle} currentDirName={dirHandle?.name||""} currentApiKey={apiKey} currentOpenaiKey={openaiKey}/>;
   }
 
-  return <Library dirHandle={dirHandle} apiKey={apiKey} userName={userName} openaiKey={openaiKey}/>;
+  return <Library dirHandle={dirHandle} apiKey={apiKey} userName={userName} openaiKey={openaiKey} onLogoff={()=>setPhase("setup")}/>;
 }
 
 ReactDOM.createRoot(document.getElementById("root")).render(<Root/>);
