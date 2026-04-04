@@ -4769,6 +4769,7 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
         try{
           const synopsis = sanitizeSynopsisText(await fetchBookSynopsis(apiKey, bookTitle, bookAuthor));
           setBooks(prev=>{
+            if(!prev.find(b=>b.id===bookId)) return prev; // livro foi deletado
             const nb2=prev.map(b=>b.id===bookId?{...b,synopsis,synopsisStatus:"done"}:b);
             persist(nb2,nextCats,wishlist,profiles);
             return nb2;
@@ -4788,6 +4789,7 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
             const chunks = splitTextIntoChunks(text);
             const embs = await generateAndSaveEmbeddings(bookId, chunks, dirHandle, openaiKey, ()=>{});
             setBooks(prev=>{
+              if(!prev.find(b=>b.id===bookId)) return prev; // livro foi deletado
               const nb2=prev.map(b=>b.id===bookId?{...b,embeddingsStatus:"done"}:b);
               persist(nb2,nextCats,wishlist,profiles);
               return nb2;
@@ -4811,6 +4813,7 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
           if(concepts.length > 0){
             await saveBookConcepts(dirHandle, bookId, concepts);
             setBooks(prev=>{
+              if(!prev.find(b=>b.id===bookId)) return prev; // livro foi deletado
               const nb2=prev.map(b=>b.id===bookId?{...b,conceptsStatus:"done"}:b);
               persist(nb2,nextCats,wishlist,profiles);
               return nb2;
@@ -5077,6 +5080,7 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
         .then(async raw => {
           const synopsis = sanitizeSynopsisText(raw);
           setBooks(prev=>{
+            if(!prev.find(b=>b.id===fid)) return prev; // livro foi deletado
             const nb=prev.map(b=>b.id===fid?{...b,synopsis,synopsisStatus:"done"}:b);
             persist(nb,cats,wishlist,profiles);
             return nb;
@@ -5108,6 +5112,7 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
           setBookEmbeddings(generatedEmbs);
           setGeneratingEmbeddings(false);
           setBooks(prev=>{
+            if(!prev.find(b=>b.id===fid)) return prev; // livro foi deletado
             const nb=prev.map(b=>b.id===fid?{...b,embeddingsStatus:"done"}:b);
             persist(nb,cats,wishlist,profiles);
             return nb;
