@@ -1202,16 +1202,34 @@ async function loadIdx(dir){
     }
 
     return fullyMigrated;
-  }catch{
-    const fresh = {
-      schemaVersion: CURRENT_SCHEMA_VERSION,
-      books: [],
-      categories: [...DEF_CATS],
-      wishlist: [],
-      profiles: []
-    };
-    await saveIdx(dir, fresh);
-    return fresh;
+  }catch(e){
+    console.error("[loadIdx] JSON corrompido, tentando recuperar:", e.message);
+    // Tenta ler o arquivo cru e extrair o que for possível — NUNCA zerar livros
+    try{
+      const raw = await rf(dir, "index.json");
+      // Se chegou aqui, o problema foi na migração, não no parse
+      // Retorna estrutura mínima preservando o texto original como fallback
+      const minimal = JSON.parse(raw);
+      return {
+        schemaVersion: CURRENT_SCHEMA_VERSION,
+        books: Array.isArray(minimal?.books) ? minimal.books : [],
+        categories: Array.isArray(minimal?.categories) ? minimal.categories : [...DEF_CATS],
+        wishlist: Array.isArray(minimal?.wishlist) ? minimal.wishlist : [],
+        profiles: Array.isArray(minimal?.profiles) ? minimal.profiles : []
+      };
+    }catch{
+      // Só zera se o arquivo realmente não puder ser lido nem parseado
+      console.error("[loadIdx] Arquivo irrecuperável — iniciando com estado vazio");
+      const fresh = {
+        schemaVersion: CURRENT_SCHEMA_VERSION,
+        books: [],
+        categories: [...DEF_CATS],
+        wishlist: [],
+        profiles: []
+      };
+      // NÃO sobrescreve o arquivo corrompido — preserva para debug
+      return fresh;
+    }
   }
 }
 
@@ -3570,7 +3588,7 @@ function ProfileSwitcher({userName,onSwitch,profiles=[]}){
       </button>
 
       {open && (
-        <div style={{position:"absolute",top:"calc(100% + 6px)",right:0,background:"#1e3554",border:"1px solid #2d4a6e",borderRadius:9,padding:"8px 0",minWidth:190,zIndex:100,boxShadow:"0 10px 30px rgba(0,0,0,.45)"}}>
+        <div style={{position:"absolute",bottom:"calc(100% + 6px)",top:"auto",right:0,background:"#1e3554",border:"1px solid #2d4a6e",borderRadius:9,padding:"8px 0",minWidth:190,zIndex:100,boxShadow:"0 10px 30px rgba(0,0,0,.45)"}}>
           {options.map(p=>(
             <button
               key={p}
@@ -4762,27 +4780,28 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey,
   useEffect(()=>{ wishlistRef.current = wishlist;  },[wishlist]);
   useEffect(()=>{ profilesRef.current = profiles;  },[profiles]);
 
-  // persist: zero argumentos — sempre lê das refs, impossível usar snapshot stale
-  const persist=async()=>{
-    const normalizedCats = normalizeCategories(catsRef.current);
-    const validSet = new Set(normalizedCats);
-
-    const booksToStore=(booksRef.current||[]).map(({_hasNotes,_hasChats,...rest})=>({
-      ...rest,
-      tags: normalizeTags(rest.tags),
-      category: validSet.has(normalizeCategory(rest.category)) ? normalizeCategory(rest.category) : ""
-    }));
-
-    const data = {
-      books:booksToStore,
-      categories:normalizedCats,
-      wishlist:normalizeWishlist(wishlistRef.current),
-      profiles:uniqueCaseInsensitive(profilesRef.current||[])
-    };
-
+  // persist: zero argumentos, captura estado DENTRO da fila (no momento da execução real)
+  // Isso garante que sempre usa o estado mais recente, mesmo que outros setBooks tenham ocorrido
+  const persist=()=>{
     return new Promise((resolve, reject) => {
       persistQueueRef.current = persistQueueRef.current
-        .then(() => saveIdx(dirHandle, data))
+        .then(() => {
+          // Captura aqui — no momento da execução, não da chamada
+          const normalizedCats = normalizeCategories(catsRef.current);
+          const validSet = new Set(normalizedCats);
+          const booksToStore=(booksRef.current||[]).map(({_hasNotes,_hasChats,...rest})=>({
+            ...rest,
+            tags: normalizeTags(rest.tags),
+            category: validSet.has(normalizeCategory(rest.category)) ? normalizeCategory(rest.category) : ""
+          }));
+          const data = {
+            books:booksToStore,
+            categories:normalizedCats,
+            wishlist:normalizeWishlist(wishlistRef.current),
+            profiles:uniqueCaseInsensitive(profilesRef.current||[])
+          };
+          return saveIdx(dirHandle, data);
+        })
         .then(resolve)
         .catch(e => { console.error("persist falhou:", e.message); reject(e); });
     });
@@ -4937,14 +4956,16 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey,
       // Adiciona livro ao estado imediatamente
       setBooks(prev=>{
         const nb=[...prev,book];
-        booksRef.current=nb; // sincronamente — persist lê isso
+        booksRef.current=nb;
         return nb;
       });
-      persist().catch(e=>console.error("persist doAdd falhou:",e));
+
+      // await — garante que o livro está no index.json antes de fechar o modal
+      await persist();
 
       setUpProg(100);
 
-      // Fecha modal imediatamente — não depende de persist
+      // Fecha modal após persistência confirmada
       setModal(null);
       setPendingFile(null);
       setUploading(false);
@@ -5194,7 +5215,7 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey,
     const renameMap = payload?.renameMap || {};
     const validSet = new Set(normalized);
 
-    const nb = books.map(b=>{
+    const nb = booksRef.current.map(b=>{
       let nextCategory = normalizeCategory(b.category || "");
       if(nextCategory && renameMap[nextCategory]){
         nextCategory = normalizeCategory(renameMap[nextCategory]);
@@ -5607,21 +5628,22 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey,
   const updateConceptsAll=async(reprocessAll=false)=>{
     setConceptsProcessing(true);
     const existing = await loadConceptsIndex(dirHandle);
+    const liveBooks = [...booksRef.current]; // snapshot do estado real no início
 
     // Fix 1: detecta pendentes com Promise.all
     const hasConceptsMap = {};
-    await Promise.all(books.map(async b=>{
+    await Promise.all(liveBooks.map(async b=>{
       const concepts = await loadBookConcepts(dirHandle, b.id);
       hasConceptsMap[b.id] = concepts.length > 0;
     }));
 
     const toProcess = reprocessAll
-      ? books
-      : books.filter(b => b.conceptsStatus !== "done" || !hasConceptsMap[b.id]);
+      ? liveBooks
+      : liveBooks.filter(b => b.conceptsStatus !== "done" || !hasConceptsMap[b.id]);
 
     // Fix 2: acumula status em objeto local
     const updatedStatus = {};
-    const currentBooks = [...books];
+    const currentBooks = liveBooks;
 
     for(const book of toProcess){
       try{
@@ -6306,7 +6328,8 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey,
   };
 
   const updateBookNotesPresence=async(bookId,hasNotes)=>{
-    const nb=books.map(b=>b.id===bookId ? {...b,_hasNotes:hasNotes} : b);
+    const nb=booksRef.current.map(b=>b.id===bookId ? {...b,_hasNotes:hasNotes} : b);
+    booksRef.current=nb;
     setBooks(nb);
     if(selBook?.id===bookId) setSelBook(p=>p?{...p,_hasNotes:hasNotes}:p);
     if(nb.find(b=>b.id===bookId)) await persist();
