@@ -3,6 +3,7 @@
 
 
 
+
 <!DOCTYPE html>
 <html lang="pt-BR">
 <head>
@@ -1606,8 +1607,8 @@ function deriveBookStatus(book){
   const errorField = fields.find(f => book[f] === "error");
   if(errorField) return { state:"atencao", errorKey: errorField };
 
-  // 2. Qualquer campo ainda processando
-  const processing = fields.some(f => book[f] === "processing");
+  // 2. Qualquer campo ainda processando ou pendente (livro recém adicionado)
+  const processing = fields.some(f => book[f] === "processing" || book[f] === "pending");
   if(processing) return { state:"preparando" };
 
   // 3. Verificar se todos os campos estão "done"
@@ -3426,12 +3427,16 @@ function Setup({onReady, savedProfiles=[], currentDir=null, currentDirName="", c
     const idx=await loadIdx(dir);
     const profiles=uniqueCaseInsensitive([...(idx.profiles||[]), name]);
 
-    await saveIdx(dir,{
-      books:idx.books||[],
-      categories:idx.categories||[...DEF_CATS],
-      wishlist:idx.wishlist||[],
-      profiles
-    });
+    // Só atualiza profiles — não toca em books, categories ou wishlist
+    // para não sobrescrever dados salvos pela sessão anterior
+    if(!idx.profiles?.includes(name)){
+      await saveIdx(dir,{
+        books:idx.books||[],
+        categories:idx.categories||[...DEF_CATS],
+        wishlist:idx.wishlist||[],
+        profiles
+      });
+    }
 
     await idbSet("dir",dir);
 
@@ -4910,14 +4915,12 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey,
 
       setUpProg(100);
 
-      // Fecha modal imediatamente
-      setTimeout(()=>{
-        setModal(null);
-        setPendingFile(null);
-        setUploading(false);
-        setUpProg(0);
-        setUploadQualityAlert("");
-      },300);
+      // Fecha modal imediatamente — síncrono, antes do background começar
+      setModal(null);
+      setPendingFile(null);
+      setUploading(false);
+      setUpProg(0);
+      setUploadQualityAlert("");
 
       pushToast("Livro adicionado — processando em background…");
 
@@ -5018,17 +5021,18 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey,
     const finalCategory = nextCats.includes(normalizedCategory) ? normalizedCategory : "";
     const nextTags = normalizeTags(fd.tags);
 
-    const nb = books.map(b => b.id===targetBook.id
-      ? {...b,...fd, category:finalCategory, tags:nextTags}
-      : b
-    );
-    setBooks(nb);
-
     if(selBookRef.current?.id === targetBook.id){
       setSelBook(p => ({...p,...fd, category:finalCategory, tags:nextTags}));
     }
 
-    await persist(nb, nextCats, wishlist, profiles);
+    setBooks(prev=>{
+      const nb = prev.map(b => b.id===targetBook.id
+        ? {...b,...fd, category:finalCategory, tags:nextTags}
+        : b
+      );
+      persist(nb, nextCats, wishlist, profiles);
+      return nb;
+    });
     pushToast("Livro atualizado");
   };
 
@@ -5206,6 +5210,7 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey,
     setAutoDecision(null);
     setGeneratingEmbeddings(false);
     setChatMode("auto");
+    setChatLoading(false);
 
     await bumpStat(freshBook.id);
 
@@ -5344,34 +5349,44 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey,
     }
   };
 
-  const saveCurrentChat=async(msgs)=>{
-    if(!selBook || !msgs.length) return;
+  const saveCurrentChat=async(msgs, savedBookId, savedActiveChatId, savedChatSessions)=>{
+    if(!savedBookId || !msgs.length) return;
 
-    // Garante que o livro não mudou durante operação assíncrona
-    if(selBookRef.current?.id !== selBook.id) return;
-
+    // Usa bookId fixo capturado no momento do envio — não o closure de selBook
     const firstUser=msgs.find(m=>m.role==="user");
     const title=firstUser ? firstUser.content.slice(0,50) : "Conversa";
     const date=new Date().toLocaleDateString("pt-BR");
-    let sessions=[...chatSessions];
+    let sessions=[...(savedChatSessions||[])];
 
-    if(activeChatId){
-      sessions=sessions.map(s=>s.id===activeChatId ? {...s,messages:msgs,title,date} : s);
+    let chatId = savedActiveChatId;
+    if(chatId){
+      sessions=sessions.map(s=>s.id===chatId ? {...s,messages:msgs,title,date} : s);
     }else{
-      const id=uid();
-      sessions=[{id,title,date,messages:msgs,profileId:userName,bookId:selBook.id}, ...sessions];
-      setActiveChatId(id);
-      localStorage.setItem(`mynd_lastChat_${selBook.id}`,id);
+      chatId=uid();
+      sessions=[{id:chatId,title,date,messages:msgs,profileId:userName,bookId:savedBookId}, ...sessions];
+      // Só atualiza estado se ainda estiver no mesmo livro
+      if(selBookRef.current?.id === savedBookId){
+        setActiveChatId(chatId);
+        localStorage.setItem(`mynd_lastChat_${savedBookId}`,chatId);
+      }
     }
 
-    setChatSessions(sessions);
-    await saveChats(dirHandle,selBook.id,userName,sessions);
+    // Só atualiza sessions se ainda estiver no mesmo livro
+    if(selBookRef.current?.id === savedBookId){
+      setChatSessions(sessions);
+    }
+    await saveChats(dirHandle,savedBookId,userName,sessions);
 
-    if(!selBook._hasChats){
-      const nb=books.map(b=>b.id===selBook.id ? {...b,_hasChats:true} : b);
-      setBooks(nb);
+    // Só atualiza _hasChats se ainda estiver no mesmo livro
+    if(selBookRef.current?.id === savedBookId){
+      setBooks(prev=>{
+        const b = prev.find(x=>x.id===savedBookId);
+        if(!b || b._hasChats) return prev;
+        const nb = prev.map(x=>x.id===savedBookId ? {...x,_hasChats:true} : x);
+        persist(nb,cats,wishlist,profiles);
+        return nb;
+      });
       setSelBook(p=>p?{...p,_hasChats:true}:p);
-      if(nb.find(b=>b.id===selBook.id)) await persist(nb,cats,wishlist,profiles);
     }
   };
 
@@ -5712,6 +5727,10 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey,
 
   const sendBook=async(txt)=>{
     if(!selBook) return;
+    // Captura valores do closure no momento do envio — evita stale em background
+    const savedBookId = selBook.id;
+    const savedActiveChatId = activeChatId;
+    const savedChatSessions = [...chatSessions];
     const next=[...bookMsgs,mkM("user",txt)];
     setBookMsgs(next);
     setChatLoading(true);
@@ -5820,7 +5839,7 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey,
 
       const final=[...next,mkM("assistant",r)];
       setBookMsgs(final);
-      await saveCurrentChat(final);
+      saveCurrentChat(final, savedBookId, savedActiveChatId, savedChatSessions); // sem await
     }catch(e){
       const msg = e.message || "Erro desconhecido.";
       const isFetch = msg.toLowerCase().includes("failed to fetch") || msg.toLowerCase().includes("networkerror");
@@ -5958,9 +5977,9 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey,
         ? "Sem conexão com a API. Verifique sua internet ou se há saldo disponível na conta Anthropic."
         : msg;
       setGlobalMsgs(p=>[...p,mkM("assistant", display)]);
+    }finally{
+      setChatLoading(false);
     }
-
-    setChatLoading(false);
   };
 
   const exportChat=(msgs,title)=>{
@@ -6597,6 +6616,7 @@ function Root(){
   const [openaiKey,setOpenaiKey]=useState("");
   const [userName,setUser]=useState("");
   const [savedProfiles,setSavedProfiles]=useState([]);
+  const [sessionKey,setSessionKey]=useState(0);
 
   useEffect(()=>{
     if(!window.showDirectoryPicker){
@@ -6714,10 +6734,10 @@ function Root(){
   if(phase==="profile_select") setPhase("setup");
 
   if(phase==="setup"){
-    return <Setup onReady={(dh,k,name,oaik)=>{ setDir(dh); setKey(k); setUser(name); setOpenaiKey(oaik||""); setPhase("app"); }} savedProfiles={savedProfiles} currentDir={dirHandle} currentDirName={dirHandle?.name||""} currentApiKey={apiKey} currentOpenaiKey={openaiKey}/>;
+    return <Setup onReady={(dh,k,name,oaik)=>{ setDir(dh); setKey(k); setUser(name); setOpenaiKey(oaik||""); setSessionKey(s=>s+1); setPhase("app"); }} savedProfiles={savedProfiles} currentDir={dirHandle} currentDirName={dirHandle?.name||""} currentApiKey={apiKey} currentOpenaiKey={openaiKey}/>;
   }
 
-  return <Library dirHandle={dirHandle} apiKey={apiKey} userName={userName} openaiKey={openaiKey} onLogoff={()=>setPhase("setup")}/>;
+  return <Library key={sessionKey} dirHandle={dirHandle} apiKey={apiKey} userName={userName} openaiKey={openaiKey} onLogoff={()=>setPhase("setup")}/>;
 }
 
 ReactDOM.createRoot(document.getElementById("root")).render(<Root/>);
