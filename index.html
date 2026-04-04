@@ -1397,7 +1397,7 @@ async function fetchBookSynopsis(apiKey, title, author){
   const query = author ? `${title} — ${author}` : title;
   const r = await callClaude(
     apiKey,
-    `Você é um assistente literário. Baseado no seu conhecimento geral, escreva uma sinopse concisa do livro em português (3 frases no máximo): do que trata e para quem é indicado. Comece OBRIGATORIAMENTE com o formato: "{Título}, de {Autor}, ..." — por exemplo: "War, de Bob Woodward, é um livro que...". Seja direto e breve. Não use markdown, não use títulos, não use negrito, não use #, não use * ou **. Texto corrido simples. Não repita o título em formato diferente ao longo do texto.`,
+    `Você é um assistente literário. Baseado no seu conhecimento geral, escreva uma sinopse concisa do livro em português (4 a 6 frases): do que trata, contexto, para quem é indicado e por que vale a pena ler. Comece OBRIGATORIAMENTE com o formato: "{Título}, de {Autor}, ..." — por exemplo: "War, de Bob Woodward, é um livro que...". Seja direto. Não use markdown, não use títulos, não use negrito, não use #, não use * ou **. Texto corrido simples. Não repita o título em formato diferente ao longo do texto.`,
     [{ role:"user", content:`Livro: ${query}` }],
     400
   );
@@ -2335,40 +2335,7 @@ function NotesPanel({dirHandle,bookId,profileId,otherProfiles,synopsis,synopsisS
   return(
     <div style={{padding:"10px 28px 8px", display:"flex", gap:16, alignItems:"stretch"}}>
 
-      {/* ── Lado esquerdo: Sinopse ── */}
-      <div style={{flex:1, minWidth:0, display:"flex", flexDirection:"column"}}>
-        <div style={{...lb, marginBottom:8, display:"flex", alignItems:"center", justifyContent:"space-between"}}>
-          <span style={{display:"flex", alignItems:"center", gap:5}}>
-            <Ico d={D.book} sz={11}/> Sinopse
-          </span>
-          {synopsis && synopsisStatus === "done" && onRegenerateSynopsis && (
-            <button
-              onClick={onRegenerateSynopsis}
-              title="Regenerar sinopse"
-              style={{background:"none", border:"none", cursor:"pointer", color:C.inkF, display:"flex", alignItems:"center", gap:3, fontSize:11, padding:0}}
-              onMouseEnter={e=>e.currentTarget.style.color=C.accent}
-              onMouseLeave={e=>e.currentTarget.style.color=C.inkF}
-            >
-              <Ico d={D.arrowUp} sz={11}/> Regenerar
-            </button>
-          )}
-        </div>
-        <div style={{background:C.card, border:`1px solid ${C.border}`, borderRadius:8, padding:"12px 14px", flex:1}}>
-          {synopsis ? (
-            <p style={{fontSize:13.5, color:C.inkD, lineHeight:1.75}}>{renderSynopsis(synopsis)}</p>
-          ) : synopsisStatus === "pending" || synopsisStatus === "processing" ? (
-            <p style={{fontSize:13, color:C.inkF, fontStyle:"italic", lineHeight:1.6}}>
-              {synopsisStatus === "processing" ? "Gerando sinopse…" : "Sinopse ainda não gerada."}
-            </p>
-          ) : synopsisStatus === "error" ? (
-            <p style={{fontSize:13, color:"#7a1e1e", fontStyle:"italic"}}>Erro ao gerar sinopse.</p>
-          ) : (
-            <p style={{fontSize:13, color:C.inkF, fontStyle:"italic"}}>Sinopse indisponível.</p>
-          )}
-        </div>
-      </div>
-
-      {/* ── Lado direito: Notas ── */}
+      {/* ── Lado esquerdo: Notas ── */}
       <div style={{flex:1, minWidth:0, display:"flex", flexDirection:"column"}}>
         {/* Header */}
         <div style={{display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:8, gap:8, flexWrap:"wrap"}}>
@@ -2430,6 +2397,42 @@ function NotesPanel({dirHandle,bookId,profileId,otherProfiles,synopsis,synopsisS
             </div>
           </div>
         )}
+      </div>
+
+      {/* ── Lado direito: Sinopse ── */}
+      <div style={{flex:1, minWidth:0, display:"flex", flexDirection:"column"}}>
+        <div style={{...lb, marginBottom:8, display:"flex", alignItems:"center", justifyContent:"space-between"}}>
+          <span style={{display:"flex", alignItems:"center", gap:5}}>
+            <Ico d={D.book} sz={11}/> Sinopse
+          </span>
+          {synopsis && synopsisStatus === "done" && onRegenerateSynopsis && (
+            <button
+              onClick={onRegenerateSynopsis}
+              title="Regenerar sinopse"
+              style={{background:"none", border:"none", cursor:"pointer", color:C.inkF, display:"flex", alignItems:"center", gap:3, fontSize:11, padding:0}}
+              onMouseEnter={e=>e.currentTarget.style.color=C.accent}
+              onMouseLeave={e=>e.currentTarget.style.color=C.inkF}
+            >
+              <Ico d={D.arrowUp} sz={11}/> Regenerar
+            </button>
+          )}
+        </div>
+        <div style={{
+          background:C.card, border:`1px solid ${C.border}`, borderRadius:8, padding:"12px 14px",
+          flex:1
+        }}>
+          {synopsis ? (
+            <p style={{fontSize:13.5, color:C.inkD, lineHeight:1.75}}>{renderSynopsis(synopsis)}</p>
+          ) : synopsisStatus === "pending" || synopsisStatus === "processing" ? (
+            <p style={{fontSize:13, color:C.inkF, fontStyle:"italic", lineHeight:1.6}}>
+              {synopsisStatus === "processing" ? "Gerando sinopse…" : "Sinopse ainda não gerada."}
+            </p>
+          ) : synopsisStatus === "error" ? (
+            <p style={{fontSize:13, color:"#7a1e1e", fontStyle:"italic"}}>Erro ao gerar sinopse.</p>
+          ) : (
+            <p style={{fontSize:13, color:C.inkF, fontStyle:"italic"}}>Sinopse indisponível.</p>
+          )}
+        </div>
       </div>
 
       {/* Modal de notas salvas */}
@@ -2537,36 +2540,15 @@ function ModeToggle({mode, setMode, deepDisabled}){
   );
 }
 
-function ChatArea({messages,loading,onSend,placeholder,emptyNode,onExport,mode,setMode,deepDisabled,onToggleInsight,savedMessageIds=new Set(),apiKey=""}){
+function ChatArea({messages,loading,onSend,placeholder,emptyNode,onExport,mode,setMode,deepDisabled,onToggleInsight,savedMessageIds=new Set()}){
   const [input,setInput]=useState("");
   const [pendingInsightMsg,setPendingInsightMsg]=useState(null);
   const endRef=useRef();
-  const lastAssistantRef=useRef();
   const inputRef=useRef();
-  const prevMsgCountRef=useRef(0);
 
   useEffect(()=>{
-    const msgs = messages;
-    const prev = prevMsgCountRef.current;
-    prevMsgCountRef.current = msgs.length;
-
-    if(msgs.length === 0) return;
-
-    // Nova mensagem adicionada
-    if(msgs.length > prev){
-      const last = msgs[msgs.length - 1];
-      if(last.role === "assistant" && lastAssistantRef.current){
-        // Scroll para o início da resposta do assistente
-        lastAssistantRef.current.scrollIntoView({ block:"start", behavior:"smooth" });
-      } else {
-        endRef.current?.scrollIntoView({ behavior:"smooth" });
-      }
-    }
-  },[messages]);
-
-  useEffect(()=>{
-    if(loading) endRef.current?.scrollIntoView({ behavior:"smooth" });
-  },[loading]);
+    endRef.current?.scrollIntoView({behavior:"smooth"});
+  },[messages,loading]);
 
   useEffect(()=>{
     setInput("");
@@ -2595,12 +2577,9 @@ function ChatArea({messages,loading,onSend,placeholder,emptyNode,onExport,mode,s
       >
         {messages.length===0 && emptyNode}
 
-        {messages.map((m,i)=>{
-          const isLastAssistant = m.role==="assistant" && i===messages.map(x=>x.role).lastIndexOf("assistant");
-          return(
+        {messages.map((m,i)=>(
           <div
             key={i}
-            ref={isLastAssistant ? lastAssistantRef : null}
             style={{
               display:"flex",
               gap:10,
@@ -2627,11 +2606,9 @@ function ChatArea({messages,loading,onSend,placeholder,emptyNode,onExport,mode,s
                 <button
                   onClick={()=>{
                     if(savedMessageIds.has(m.id)){
-                      onToggleInsight(m, null);
+                      onToggleInsight(m, null); // remove direto
                     } else {
-                      // Pega a pergunta anterior (mensagem user imediatamente antes)
-                      const prevUser = messages.slice(0,i).reverse().find(x=>x.role==="user");
-                      setPendingInsightMsg({...m, questionText: prevUser?.content || ""});
+                      setPendingInsightMsg(m); // abre modal para nome
                     }
                   }}
                   title={savedMessageIds.has(m.id) ? "Remover insight" : "Salvar como insight"}
@@ -2665,8 +2642,7 @@ function ChatArea({messages,loading,onSend,placeholder,emptyNode,onExport,mode,s
               </div>
             </div>
           </div>
-        );
-        })}
+        ))}
 
         {loading && (
           <div style={{display:"flex",gap:10,alignSelf:"flex-start"}}>
@@ -2728,8 +2704,6 @@ function ChatArea({messages,loading,onSend,placeholder,emptyNode,onExport,mode,s
 
       {pendingInsightMsg && (
         <SaveInsightModal
-          msg={pendingInsightMsg}
-          apiKey={apiKey}
           onSave={(name)=>{
             onToggleInsight(pendingInsightMsg, name);
             setPendingInsightMsg(null);
@@ -2743,34 +2717,11 @@ function ChatArea({messages,loading,onSend,placeholder,emptyNode,onExport,mode,s
 
 // ─── SaveInsightModal ─────────────────────────────────
 
-function SaveInsightModal({ onSave, onClose, msg, apiKey }){
+function SaveInsightModal({ onSave, onClose }){
   const [name, setName] = useState("");
-  const [generating, setGenerating] = useState(true);
   const inputRef = useRef();
 
-  useEffect(()=>{
-    let cancelled = false;
-    const generate = async()=>{
-      if(!apiKey || !msg?.content) { setGenerating(false); setTimeout(()=>inputRef.current?.focus(),50); return; }
-      try{
-        const title = await callClaude(
-          apiKey,
-          `Gere um título curto (máx 5 palavras) em português para este insight, baseado na pergunta e resposta. Retorne APENAS o título, sem aspas, sem pontuação no final.`,
-          [{ role:"user", content:`Pergunta: ${(msg.questionText||"").slice(0,200)}\nResposta: ${msg.content.slice(0,300)}` }],
-          30
-        );
-        if(!cancelled){
-          setName(title.trim());
-          setGenerating(false);
-          setTimeout(()=>{ if(inputRef.current){ inputRef.current.focus(); inputRef.current.select(); }},50);
-        }
-      }catch{
-        if(!cancelled){ setGenerating(false); setTimeout(()=>inputRef.current?.focus(),50); }
-      }
-    };
-    generate();
-    return ()=>{ cancelled=true; };
-  },[]);
+  useEffect(()=>{ setTimeout(()=>inputRef.current?.focus(), 50); },[]);
 
   return(
     <div style={ov} onClick={e=>{ if(e.target===e.currentTarget) onClose(); }}>
@@ -2781,16 +2732,15 @@ function SaveInsightModal({ onSave, onClose, msg, apiKey }){
         <div style={{...lb, marginBottom:6}}>Nome do insight</div>
         <input
           ref={inputRef}
-          value={generating ? "" : name}
+          value={name}
           onChange={e=>setName(e.target.value)}
-          onKeyDown={e=>{ if(e.key==="Enter" && name.trim() && !generating) onSave(name.trim()); }}
-          placeholder={generating ? "Gerando sugestão…" : "Nome do insight"}
-          disabled={generating}
-          style={{...fi, marginBottom:18, opacity: generating ? 0.6 : 1}}
+          onKeyDown={e=>{ if(e.key==="Enter" && name.trim()) onSave(name.trim()); }}
+          placeholder="Ex: Putin e a desconfiança dos EUA"
+          style={{...fi, marginBottom:18}}
         />
         <div style={{display:"flex", gap:10, justifyContent:"flex-end"}}>
           <button style={bG} onClick={onClose}>Cancelar</button>
-          <button style={bP(!name.trim()||generating)} disabled={!name.trim()||generating} onClick={()=>onSave(name.trim())}>
+          <button style={bP(!name.trim())} disabled={!name.trim()} onClick={()=>onSave(name.trim())}>
             Salvar
           </button>
         </div>
@@ -2801,14 +2751,12 @@ function SaveInsightModal({ onSave, onClose, msg, apiKey }){
 
 // ─── InsightsSavedModal ────────────────────────────────
 
-function InsightsSavedModal({ bookInsights, onClose, onRemove, initialSelected=null }){
-  const [selected, setSelected] = useState(initialSelected);
+function InsightsSavedModal({ bookInsights, onClose, onRemove }){
+  const [selected, setSelected] = useState(null);
 
   return(
     <div style={ov} onClick={e=>{ if(e.target===e.currentTarget) onClose(); }}>
-      <div style={{...mb, width:720, maxHeight:"82vh", display:"flex", flexDirection:"column"}}>
-
-        {/* Header */}
+      <div style={{...mb, width:580, maxHeight:"80vh", display:"flex", flexDirection:"column"}}>
         <div style={{display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:16}}>
           <div style={{fontSize:18, fontWeight:700, color:C.ink, display:"flex", alignItems:"center", gap:8}}>
             ♥ Insights salvos <span style={{fontSize:13, color:C.inkF, fontWeight:400}}>({bookInsights.length})</span>
@@ -2818,59 +2766,44 @@ function InsightsSavedModal({ bookInsights, onClose, onRemove, initialSelected=n
 
         {bookInsights.length === 0 ? (
           <p style={{fontSize:14, color:C.inkF, fontStyle:"italic"}}>Nenhum insight salvo ainda.</p>
-        ) : selected ? (
-          /* ── Detalhe do insight selecionado ── */
-          <div style={{display:"flex", flexDirection:"column", flex:1, minHeight:0}}>
-            <button onClick={()=>setSelected(null)} style={{...bG, marginBottom:14, display:"flex", alignItems:"center", gap:6, fontSize:13, alignSelf:"flex-start"}}>
-              <Ico d={D.back} sz={13}/> Voltar
-            </button>
-            <div style={{display:"flex", alignItems:"flex-start", justifyContent:"space-between", marginBottom:10, gap:10}}>
-              <div style={{fontSize:16, fontWeight:700, color:C.ink}}>{selected.insightName||"Sem nome"}</div>
-              <button onClick={()=>{ onRemove(selected.id); setSelected(null); }} style={{...bI, padding:"4px 8px", color:C.red, borderColor:C.red+"44", flexShrink:0}}>
-                <Ico d={D.trash} sz={13}/>
-              </button>
-            </div>
-            <div style={{fontSize:11, color:C.inkF, marginBottom:14}}>{selected.profileId} · {new Date(selected.savedAt).toLocaleDateString("pt-BR")}</div>
-            <div className="inner-scroll" style={{overflowY:"auto", flex:1, background:C.bg, border:`1px solid ${C.border}`, borderRadius:8, padding:"14px 16px"}}>
-              <MarkdownText text={selected.answerText}/>
-            </div>
-          </div>
         ) : (
-          /* ── Tabela de insights ── */
-          <div style={{display:"flex", flexDirection:"column", flex:1, minHeight:0}}>
-            {/* Cabeçalho da tabela */}
-            <div style={{display:"grid", gridTemplateColumns:"1fr 100px 100px 32px", gap:8, padding:"0 8px 8px", borderBottom:`1px solid ${C.border}`}}>
-              <div style={{...lb, fontSize:10}}>Insight</div>
-              <div style={{...lb, fontSize:10}}>Criado por</div>
-              <div style={{...lb, fontSize:10}}>Data</div>
-              <div/>
-            </div>
-            <div className="inner-scroll" style={{overflowY:"auto", flex:1, marginTop:4}}>
+          <div style={{display:"flex", gap:12, flex:1, overflow:"hidden", minHeight:0}}>
+            <div className="inner-scroll" style={{width:220, minWidth:220, overflowY:"auto", display:"flex", flexDirection:"column", gap:4}}>
               {bookInsights.map(ins=>(
-                <div
+                <button
                   key={ins.id}
                   onClick={()=>setSelected(ins)}
-                  style={{display:"grid", gridTemplateColumns:"1fr 100px 100px 32px", gap:8, padding:"10px 8px", borderRadius:7, cursor:"pointer", alignItems:"center", transition:"background .12s"}}
-                  onMouseEnter={e=>e.currentTarget.style.background=C.card}
-                  onMouseLeave={e=>e.currentTarget.style.background="none"}
+                  style={{
+                    textAlign:"left", padding:"8px 10px", borderRadius:7, flexShrink:0,
+                    border:`1px solid ${selected?.id===ins.id ? C.accentBrd : C.border}`,
+                    background:selected?.id===ins.id ? C.accentBg : C.card,
+                    cursor:"pointer"
+                  }}
                 >
-                  <div style={{minWidth:0}}>
-                    <div style={{fontSize:13, fontWeight:600, color:C.inkD, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap"}}>{ins.insightName||"Sem nome"}</div>
-                    <div style={{fontSize:11, color:C.inkF, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", marginTop:2}}>{ins.answerText?.slice(0,80)}…</div>
+                  <div style={{fontSize:12, fontWeight:600, color:selected?.id===ins.id ? C.accent : C.inkD, marginBottom:3, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap"}}>
+                    {ins.insightName || "Sem nome"}
                   </div>
-                  <div style={{fontSize:12, color:C.inkF}}>{ins.profileId}</div>
-                  <div style={{fontSize:12, color:C.inkF}}>{new Date(ins.savedAt).toLocaleDateString("pt-BR")}</div>
-                  <button
-                    onClick={e=>{ e.stopPropagation(); onRemove(ins.id); }}
-                    style={{background:"none", border:"none", cursor:"pointer", color:C.inkF, display:"flex", alignItems:"center", justifyContent:"center", padding:4, borderRadius:4}}
-                    onMouseEnter={e=>{ e.stopPropagation(); e.currentTarget.style.color=C.red; }}
-                    onMouseLeave={e=>{ e.currentTarget.style.color=C.inkF; }}
-                    title="Remover insight"
-                  >
-                    <Ico d={D.trash} sz={13} col="currentColor"/>
-                  </button>
-                </div>
+                  <div style={{fontSize:11, color:C.inkF}}>{ins.profileId} · {new Date(ins.savedAt).toLocaleDateString("pt-BR")}</div>
+                </button>
               ))}
+            </div>
+            <div className="inner-scroll" style={{flex:1, overflowY:"auto"}}>
+              {selected ? (
+                <div style={{background:C.bg, border:`1px solid ${C.border}`, borderRadius:9, padding:"14px 16px"}}>
+                  <div style={{display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:10}}>
+                    <div style={{fontSize:13, fontWeight:700, color:C.ink}}>{selected.insightName || "Sem nome"}</div>
+                    <div style={{display:"flex", gap:6}}>
+                      <button onClick={()=>{ onRemove(selected.id); setSelected(null); }} style={{...bI, padding:"4px 8px", color:C.red, borderColor:C.red+"44"}}>
+                        <Ico d={D.trash} sz={12}/>
+                      </button>
+                    </div>
+                  </div>
+                  <p style={{fontSize:13, color:C.inkD, lineHeight:1.7, whiteSpace:"pre-wrap"}}>{selected.answerText}</p>
+                  <div style={{fontSize:11, color:C.inkF, marginTop:10}}>{selected.profileId} · {new Date(selected.savedAt).toLocaleDateString("pt-BR")}</div>
+                </div>
+              ) : (
+                <p style={{fontSize:13, color:C.inkF, fontStyle:"italic", padding:"8px 0"}}>Selecione um insight para ver o conteúdo.</p>
+              )}
             </div>
           </div>
         )}
@@ -4300,112 +4233,6 @@ function InsightsPage({ insights, insightEmbeddings, openaiKey, cats, profiles }
   );
 }
 
-// ─── ConversasInsights ────────────────────────────────
-
-function ConversasInsights({ chatSessions, insights, selBook, activeChatId, userName, selectChat, deleteChat, newChat, toggleInsight, setShowInsightsModal, onOpenInsight }){
-  const [open, setOpen] = useState(false);
-  const bookInsights = insights.filter(ins=>ins.bookId===selBook.id);
-
-  return(
-    <>
-      <button
-        onClick={()=>setOpen(p=>!p)}
-        style={{
-          width:"100%", display:"flex", alignItems:"center",
-          padding:"6px 28px",
-          background:"none", border:"none", borderTop:`1px solid ${C.border}`,
-          cursor:"pointer", textAlign:"left", position:"relative"
-        }}
-      >
-        {/* Chevron absoluto à esquerda */}
-        <Ico d={open ? D.chevDown : D.play} sz={10} col={C.inkF} style={{position:"absolute", left:12, top:"50%", transform:"translateY(-50%)"}}/>
-
-        {/* Lado esquerdo: alinhado com SINOPSE */}
-        <div style={{display:"flex", alignItems:"center", gap:5, flex:1, minWidth:0}}>
-          <Ico d={D.chat} sz={11} col={C.inkF}/>
-          <span style={{...lb}}>Conversas anteriores</span>
-          {chatSessions.length > 0 && <span style={{fontSize:10,color:C.inkF,fontWeight:400}}>({chatSessions.length})</span>}
-        </div>
-
-        {/* Lado direito: alinhado com NOTAS */}
-        <div style={{display:"flex", alignItems:"center", gap:5, flex:1, minWidth:0}}>
-          <span style={{color:"#e05c7a", fontSize:12, lineHeight:1}}>♥</span>
-          <span style={{...lb}}>Insights</span>
-          {bookInsights.length > 0 && <span style={{fontSize:10,color:C.inkF,fontWeight:400}}>({bookInsights.length})</span>}
-        </div>
-
-        {open && (
-          <button onClick={e=>{ e.stopPropagation(); newChat(); }} style={{background:"none",border:"none",cursor:"pointer",color:C.accent,fontSize:12,display:"flex",alignItems:"center",gap:3,fontWeight:600,padding:0,flexShrink:0}}>
-            <Ico d={D.plus} sz={11}/> Nova
-          </button>
-        )}
-        {open && bookInsights.length > 0 && (
-          <button onClick={e=>{ e.stopPropagation(); setShowInsightsModal(true); }} style={{...bI, padding:"2px 8px", display:"flex", alignItems:"center", gap:4, fontSize:11, marginLeft:8, flexShrink:0}}>
-            <span style={{color:"#e05c7a", fontSize:11}}>♥</span> Insights salvos
-          </button>
-        )}
-      </button>
-
-      {open && (
-        <div style={{padding:"0 28px 8px", display:"flex", gap:16}}>
-          {/* Conversas — máx 3 itens (~42px cada) antes do scroll */}
-          <div style={{width:"calc(50% - 8px)", minWidth:0}}>
-            {chatSessions.length === 0 ? (
-              <p style={{fontSize:13,color:C.inkF,fontStyle:"italic",padding:"4px 0"}}>Nenhuma conversa ainda.</p>
-            ) : (
-              <div className="inner-scroll" style={{display:"flex",flexDirection:"column",maxHeight:126,overflowY:"auto"}}>
-                {chatSessions.map(s=>{
-                  const isActive = s.id===activeChatId;
-                  return(
-                    <div key={s.id} style={{display:"flex",alignItems:"center",gap:8,padding:"6px 4px",borderBottom:`1px solid ${C.borderL}`,cursor:"pointer"}}
-                      onMouseEnter={e=>e.currentTarget.style.background=C.card}
-                      onMouseLeave={e=>e.currentTarget.style.background="none"}
-                      onClick={()=>selectChat(s)}
-                    >
-                      <Ico d={D.chat} sz={11} col={isActive?C.accent:C.inkF}/>
-                      <span style={{flex:1,fontSize:13,fontWeight:isActive?600:400,color:isActive?C.accent:C.inkD,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{s.title||"Sem título"}</span>
-                      <span style={{fontSize:11,color:C.inkF,flexShrink:0,whiteSpace:"nowrap"}}>{userName}</span>
-                      <span style={{fontSize:11,color:C.inkF,flexShrink:0,whiteSpace:"nowrap"}}>{s.date}</span>
-                      <button onClick={e=>{ e.stopPropagation(); deleteChat(s.id); }} style={{background:"none",border:"none",cursor:"pointer",color:C.inkF,display:"flex",padding:2,flexShrink:0}} onMouseEnter={e=>e.currentTarget.style.color=C.red} onMouseLeave={e=>e.currentTarget.style.color=C.inkF}>
-                        <Ico d={D.trash} sz={13} col="currentColor"/>
-                      </button>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-
-          {/* Insights — máx 3 itens antes do scroll */}
-          <div style={{width:"calc(50% - 8px)", minWidth:0}}>
-            {bookInsights.length === 0 ? (
-              <p style={{fontSize:13,color:C.inkF,fontStyle:"italic",padding:"4px 0"}}>Nenhum insight salvo ainda.</p>
-            ) : (
-              <div className="inner-scroll" style={{display:"flex",flexDirection:"column",maxHeight:126,overflowY:"auto"}}>
-                {bookInsights.map(ins=>(
-                  <div key={ins.id} style={{display:"flex",alignItems:"center",gap:8,padding:"6px 4px",borderBottom:`1px solid ${C.borderL}`,cursor:"pointer"}}
-                    onMouseEnter={e=>e.currentTarget.style.background=C.card}
-                    onMouseLeave={e=>e.currentTarget.style.background="none"}
-                    onClick={()=>onOpenInsight(ins)}
-                  >
-                    <span style={{color:"#e05c7a",fontSize:12,flexShrink:0}}>♥</span>
-                    <span style={{flex:1,fontSize:13,fontWeight:600,color:C.inkD,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{ins.insightName||"Sem nome"}</span>
-                    <span style={{fontSize:11,color:C.inkF,flexShrink:0,whiteSpace:"nowrap"}}>{ins.profileId}</span>
-                    <span style={{fontSize:11,color:C.inkF,flexShrink:0,whiteSpace:"nowrap"}}>{new Date(ins.savedAt).toLocaleDateString("pt-BR")}</span>
-                    <button onClick={e=>{ e.stopPropagation(); const i=insights.find(x=>x.id===ins.id); if(i) toggleInsight({id:i.messageId,content:i.answerText},selBook); }} style={{background:"none",border:"none",cursor:"pointer",color:C.inkF,display:"flex",padding:2,flexShrink:0}} onMouseEnter={e=>e.currentTarget.style.color=C.red} onMouseLeave={e=>e.currentTarget.style.color=C.inkF}>
-                      <Ico d={D.trash} sz={13} col="currentColor"/>
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-    </>
-  );
-}
-
 // ─── Library ──────────────────────────────────────────
 
 function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}){
@@ -4459,7 +4286,6 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
   const [insightEmbeddings,setInsightEmbeddings] = useState({});
   const [insightsLoaded,setInsightsLoaded] = useState(false);
   const [showInsightsModal,setShowInsightsModal] = useState(false);
-  const [selectedInsight,setSelectedInsight] = useState(null);
 
   const [searchQ,setSearchQ] = useState("");
   const [searchDraft,setSearchDraft] = useState("");
@@ -5991,35 +5817,42 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
               onRegenerateSynopsis={()=>handleRetry("synopsisStatus")}
             />
 
-            <ConversasInsights
-              chatSessions={chatSessions}
-              insights={insights}
-              selBook={selBook}
-              activeChatId={activeChatId}
-              userName={userName}
-              selectChat={selectChat}
-              deleteChat={deleteChat}
-              newChat={newChat}
-              toggleInsight={toggleInsight}
-              setShowInsightsModal={setShowInsightsModal}
-              onOpenInsight={(ins)=>{ setSelectedInsight(ins); setShowInsightsModal(true); }}
-            />
+            <div style={{padding:"10px 28px 8px", display:"flex", gap:16, alignItems:"stretch"}}>
+              <BookInsights
+                bookId={selBook.id}
+                insights={insights}
+                onRemove={(insightId)=>{
+                  const ins = insights.find(i=>i.id===insightId);
+                  if(ins) toggleInsight({id:ins.messageId, content:ins.answerText}, selBook);
+                }}
+                onShowModal={()=>setShowInsightsModal(true)}
+              />
+            </div>
 
             {showInsightsModal && (
               <InsightsSavedModal
                 bookInsights={insights.filter(ins=>ins.bookId===selBook.id)}
-                initialSelected={selectedInsight}
-                onClose={()=>{ setShowInsightsModal(false); setSelectedInsight(null); }}
+                onClose={()=>setShowInsightsModal(false)}
                 onRemove={(insightId)=>{
                   const ins = insights.find(i=>i.id===insightId);
                   if(ins) toggleInsight({id:ins.messageId, content:ins.answerText}, selBook);
                   setShowInsightsModal(false);
-                  setSelectedInsight(null);
                 }}
               />
             )}
 
-            <div style={{padding:"6px 28px 0",borderBottom:`1px solid ${C.border}`,borderTop:`1px solid ${C.border}`}}>
+            <ChatHistory
+              sessions={chatSessions}
+              otherSessions={otherSessions}
+              activeId={activeChatId}
+              onSelect={selectChat}
+              onNew={newChat}
+              onDelete={deleteChat}
+              otherProfileNames={otherProfiles}
+              title="Conversas anteriores"
+            />
+
+            <div style={{padding:"6px 28px 0",borderBottom:`1px solid ${C.border}`,borderTop:chatSessions.length || Object.keys(otherSessions).length ? `1px solid ${C.border}` : "none"}}>
               <div style={{...lb,paddingBottom:7,display:"flex",alignItems:"center",gap:6}}>
                 <Ico d={D.chat} sz={11}/> Conversa
               </div>
@@ -6037,7 +5870,6 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
               deepDisabled={!bookCanUseDeep}
               onToggleInsight={selBook ? (msg, name)=>toggleInsight(msg, selBook, name) : null}
               savedMessageIds={new Set(insights.filter(ins=>ins.bookId===selBook?.id).map(ins=>ins.messageId))}
-              apiKey={apiKey}
             />
           </div>
         )}
