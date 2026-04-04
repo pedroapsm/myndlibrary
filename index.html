@@ -1,8 +1,3 @@
-
-
-
-
-
 <!DOCTYPE html>
 <html lang="pt-BR">
 <head>
@@ -3432,13 +3427,8 @@ function Setup({onReady, savedProfiles=[], currentDir=null, currentDirName="", c
     });
 
     await idbSet("dir",dir);
-    await wf(dir,"apikey.txt",apiKey.trim());
 
-    // Salva chave OpenAI separada (pode ser vazia se usuário não quiser embeddings)
-    if(openaiKey.trim()){
-      await wf(dir,"openai_apikey.txt",openaiKey.trim());
-    }
-
+    // Chaves salvas apenas em localStorage — não em arquivos na pasta
     localStorage.setItem("mynd_user",name);
     localStorage.setItem("mynd_apikey",apiKey.trim());
     if(openaiKey.trim()) localStorage.setItem("mynd_openai_apikey",openaiKey.trim());
@@ -6559,8 +6549,8 @@ function Root(){
       try{
         const perm=await dh.queryPermission({mode:"readwrite"});
         if(perm==="granted"){
-          const k=savedKey || (await rf(dh,"apikey.txt")) || "";
-          const oaik=savedOpenaiKey || (await rf(dh,"openai_apikey.txt")) || "";
+          const k=savedKey || "";
+          const oaik=savedOpenaiKey || "";
           if(!k?.trim()){
             setPhase("setup");
             return;
@@ -6617,8 +6607,8 @@ function Root(){
           setPhase("setup");
           return;
         }
-        const k=window._pendingKey || (await rf(dh,"apikey.txt")) || "";
-        const oaik=window._pendingOpenaiKey || (await rf(dh,"openai_apikey.txt")) || "";
+        const k=window._pendingKey || "";
+        const oaik=window._pendingOpenaiKey || "";
         const u=window._pendingUser;
         if(!k || !u){
           setPhase("setup");
