@@ -4928,7 +4928,7 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
     const currentScreen  = screenRef.current;
     const currentSelBook = selBookRef.current;
 
-    const isCurrentBook = currentScreen === "book" && currentSelBook?.id === book.id;
+    const isCurrentBook = currentSelBook?.id === book.id;
     const isLastBook = lastBook?.id === book.id;
 
     if(isCurrentBook){
