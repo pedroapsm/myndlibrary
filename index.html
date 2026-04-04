@@ -4592,31 +4592,41 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey,
         };
       });
 
-      // ── Reconciliação de status no bootstrap ─────────────
-      // Verifica arquivos reais para cada livro e corrige status stale sem chamar APIs.
+      // ── Reconciliação bidirecional de status no bootstrap ──
+      // Verifica dados reais e corrige status em ambas as direções sem chamar APIs.
       const reconciledBooks = await (async () => {
         const corrected = await Promise.all(booksWithMeta.map(async book => {
           let patch = {};
 
-          // synopsis: dado inline no objeto — verifica diretamente
-          if(book.synopsisStatus === "error" || book.synopsisStatus === "pending"){
-            if(book.synopsis && book.synopsis.trim()) patch.synopsisStatus = "done";
+          // synopsis: dado inline — sobe para "done" se válido, desce para "pending" se não
+          if(book.synopsis && book.synopsis.trim()){
+            if(book.synopsisStatus !== "done") patch.synopsisStatus = "done";
+          } else {
+            if(book.synopsisStatus === "done") patch.synopsisStatus = "pending";
           }
 
-          // embeddings: verifica arquivo real
-          if(book.embeddingsStatus !== "done"){
-            try{
-              const embs = await loadEmbeddings(dirHandle, book.id);
-              if(embs && embs.length) patch.embeddingsStatus = "done";
-            }catch{}
+          // embeddings: verifica arquivo real em ambas as direções
+          try{
+            const embs = await loadEmbeddings(dirHandle, book.id);
+            if(embs && embs.length){
+              if(book.embeddingsStatus !== "done") patch.embeddingsStatus = "done";
+            } else {
+              if(book.embeddingsStatus === "done") patch.embeddingsStatus = "pending";
+            }
+          }catch{
+            if(book.embeddingsStatus === "done") patch.embeddingsStatus = "pending";
           }
 
-          // concepts: verifica arquivo real
-          if(book.conceptsStatus !== "done"){
-            try{
-              const concepts = await loadBookConcepts(dirHandle, book.id);
-              if(concepts && concepts.length) patch.conceptsStatus = "done";
-            }catch{}
+          // concepts: verifica arquivo real em ambas as direções
+          try{
+            const concepts = await loadBookConcepts(dirHandle, book.id);
+            if(concepts && concepts.length){
+              if(book.conceptsStatus !== "done") patch.conceptsStatus = "done";
+            } else {
+              if(book.conceptsStatus === "done") patch.conceptsStatus = "pending";
+            }
+          }catch{
+            if(book.conceptsStatus === "done") patch.conceptsStatus = "pending";
           }
 
           return Object.keys(patch).length ? {...book, ...patch} : book;
