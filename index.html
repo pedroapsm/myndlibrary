@@ -5103,6 +5103,18 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey,
     const embs = await loadEmbeddings(dirHandle, freshBook.id);
     setBookEmbeddings(embs);
 
+    // Reconciliação silenciosa: arquivo existe mas status não reflete isso
+    if(embs && embs.length && freshBook.embeddingsStatus !== "done"){
+      const fid = freshBook.id;
+      setBooks(prev=>{
+        if(!prev.find(b=>b.id===fid)) return prev;
+        const nb = prev.map(b=>b.id===fid?{...b,embeddingsStatus:"done"}:b);
+        persist(nb,cats,wishlist,profiles);
+        return nb;
+      });
+      setSelBook(p=>p?{...p,embeddingsStatus:"done"}:p);
+    }
+
     // Verificar se PDF original está disponível
     const deepAvailable = await rf(dirHandle,`${freshBook.id}.pdf`);
     setBookCanUseDeep(!!deepAvailable);
