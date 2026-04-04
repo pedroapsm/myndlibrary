@@ -4886,10 +4886,24 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
       }
     }
 
-    // Calcula nb diretamente do state atual via ref para evitar closure stale
-    const nb = (selBookRef.current ? [...books] : books).filter(b => b.id !== book.id);
+    // Filtra o livro e persiste diretamente (bypass da fila para garantir atomicidade)
+    const nb = books.filter(b => b.id !== book.id);
     setBooks(nb);
-    await persist(nb, cats, wishlist, profiles);
+
+    const normalizedCats = normalizeCategories(cats);
+    const validSet = new Set(normalizedCats);
+    const booksToStore = nb.map(({_hasNotes,_hasChats,...rest})=>({
+      ...rest,
+      tags: normalizeTags(rest.tags),
+      category: validSet.has(normalizeCategory(rest.category)) ? normalizeCategory(rest.category) : ""
+    }));
+    await saveIdx(dirHandle, {
+      books: booksToStore,
+      categories: normalizedCats,
+      wishlist,
+      profiles
+    });
+    console.log("[doDelete] index.json salvo. Livros restantes:", booksToStore.map(b=>b.title));
 
     setStats(prev=>{
       const nextConsultations={...prev.consultations};
