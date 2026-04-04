@@ -4587,11 +4587,12 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
       profiles:nextProfiles
     };
 
-    persistQueueRef.current = persistQueueRef.current
-      .then(() => saveIdx(dirHandle, data))
-      .catch(e => console.warn("persist falhou:", e.message));
-
-    return persistQueueRef.current;
+    return new Promise((resolve, reject) => {
+      persistQueueRef.current = persistQueueRef.current
+        .then(() => saveIdx(dirHandle, data))
+        .then(resolve)
+        .catch(e => { console.warn("persist falhou:", e.message); resolve(); });
+    });
   };
 
   const ensureProfileSaved=async(name)=>{
