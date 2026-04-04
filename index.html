@@ -4886,14 +4886,9 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
       }
     }
 
-    // Usa functional update para garantir que filtra da lista mais atual (evita closure stale)
-    let nb;
-    setBooks(prev => {
-      nb = prev.filter(b => b.id !== book.id);
-      return nb;
-    });
-    // Pequena pausa para garantir que nb está definido antes do persist
-    await new Promise(r => setTimeout(r, 0));
+    // Calcula nb diretamente do state atual via ref para evitar closure stale
+    const nb = (selBookRef.current ? [...books] : books).filter(b => b.id !== book.id);
+    setBooks(nb);
     await persist(nb, cats, wishlist, profiles);
 
     setStats(prev=>{
