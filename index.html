@@ -3894,10 +3894,10 @@ function Sidebar({
                   <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap",minWidth:0}}>
                     {b.category && <div style={{fontSize:10,color:C.sbInkF}}>{b.category}</div>}
                     {b._hasNotes && <div style={{fontSize:10,color:"#c7e4ff"}}>Notas</div>}
-                    {(b.synopsisStatus==="processing"||b.embeddingsStatus==="processing"||b.conceptsStatus==="processing") && (
+                    {deriveBookStatus(b).state === "preparando" && (
                       <div style={{fontSize:10,color:"#c4962a",animation:"bob .9s infinite"}}>⟳</div>
                     )}
-                    {(b.synopsisStatus==="error"||b.embeddingsStatus==="error"||b.conceptsStatus==="error") && (
+                    {deriveBookStatus(b).state === "atencao" && (
                       <div style={{fontSize:10,color:"#e07070"}}>✗</div>
                     )}
                   </div>
@@ -5288,84 +5288,93 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
 
     setConceptsLoading(true);
 
-    // Carrega textos e embeddings globais se ainda não carregados
-    if(!globalTexts){
-      const t={};
-      for(const b of books) t[b.id]=await rf(dirHandle,`${b.id}.txt`) || "";
-      setGlobalTexts(t);
-    }
-    if(!globalEmbeddings){
-      const embMap={};
+    try{
+      // Carrega textos e embeddings globais se ainda não carregados
+      if(!globalTexts){
+        const t={};
+        for(const b of books) t[b.id]=await rf(dirHandle,`${b.id}.txt`) || "";
+        setGlobalTexts(t);
+      }
+      if(!globalEmbeddings){
+        const embMap={};
+        await Promise.all(books.map(async b=>{
+          const embs = await loadEmbeddings(dirHandle, b.id);
+          if(embs) embMap[b.id] = embs;
+        }));
+        setGlobalEmbeddings(embMap);
+      }
+
+      // Carrega índice existente
+      const existing = await loadConceptsIndex(dirHandle);
+
+      // Detecta livros pendentes com Promise.all antes de filtrar
+      const hasConceptsMap = {};
       await Promise.all(books.map(async b=>{
-        const embs = await loadEmbeddings(dirHandle, b.id);
-        if(embs) embMap[b.id] = embs;
+        const concepts = await loadBookConcepts(dirHandle, b.id);
+        hasConceptsMap[b.id] = concepts.length > 0;
       }));
-      setGlobalEmbeddings(embMap);
-    }
 
-    // Carrega índice existente
-    const existing = await loadConceptsIndex(dirHandle);
+      // Corrige status de livros que já têm arquivo mas status desatualizado
+      const statusFixNeeded = books.filter(b => b.conceptsStatus !== "done" && hasConceptsMap[b.id]);
+      if(statusFixNeeded.length > 0){
+        const nb = books.map(b => hasConceptsMap[b.id] ? {...b, conceptsStatus:"done"} : b);
+        setBooks(nb);
+        if(nb.length > 0) await persist(nb, cats, wishlist, profiles);
+      }
 
-    // Detecta livros pendentes com Promise.all antes de filtrar
-    const hasConceptsMap = {};
-    await Promise.all(books.map(async b=>{
-      const concepts = await loadBookConcepts(dirHandle, b.id);
-      hasConceptsMap[b.id] = concepts.length > 0;
-    }));
+      const pending = books.filter(b => !hasConceptsMap[b.id]);
 
-    // Corrige status de livros que já têm arquivo mas status desatualizado
-    const statusFixNeeded = books.filter(b => b.conceptsStatus !== "done" && hasConceptsMap[b.id]);
-    if(statusFixNeeded.length > 0){
-      const nb = books.map(b => hasConceptsMap[b.id] ? {...b, conceptsStatus:"done"} : b);
-      setBooks(nb);
-      if(nb.length > 0) await persist(nb, cats, wishlist, profiles);
-    }
-
-    const pending = books.filter(b => !hasConceptsMap[b.id]);
-
-    if(pending.length > 0){
-      setConceptsLoading(false);
-      setConceptsProcessing(true);
-      const partialIndex = await rebuildConceptsIndex(dirHandle, books, apiKey, existing);
-      setConceptsIndex(partialIndex);
-
-      const updatedStatus = {};
-      const currentBooks = [...books];
-
-      for(const book of pending){
+      if(pending.length > 0){
+        setConceptsLoading(false);
+        setConceptsProcessing(true);
         try{
-          const text = globalTexts?.[book.id] || await rf(dirHandle,`${book.id}.txt`) || "";
-          const concepts = await extractConceptsForBook(book.id, text, book.title, apiKey);
-          if(concepts.length > 0){
-            await saveBookConcepts(dirHandle, book.id, concepts);
-            updatedStatus[book.id] = "done";
+          const partialIndex = await rebuildConceptsIndex(dirHandle, books, apiKey, existing);
+          setConceptsIndex(partialIndex);
+
+          const updatedStatus = {};
+          const currentBooks = [...books];
+
+          for(const book of pending){
+            try{
+              const text = globalTexts?.[book.id] || await rf(dirHandle,`${book.id}.txt`) || "";
+              const concepts = await extractConceptsForBook(book.id, text, book.title, apiKey);
+              if(concepts.length > 0){
+                await saveBookConcepts(dirHandle, book.id, concepts);
+                updatedStatus[book.id] = "done";
+              }
+            }catch(e){
+              console.warn(`Conceitos não extraídos para "${book.title}":`, e.message);
+            }
           }
-        }catch(e){
-          console.warn(`Conceitos não extraídos para "${book.title}":`, e.message);
+
+          if(Object.keys(updatedStatus).length > 0){
+            const nb = currentBooks
+              .filter(b => updatedStatus[b.id] || true) // mantém todos, mas filtra deletados no setBooks
+              .map(b => updatedStatus[b.id] ? {...b, conceptsStatus:"done"} : b);
+            setBooks(prev=>{
+              const activeIds = new Set(prev.map(b=>b.id));
+              const filtered = nb.filter(b=>activeIds.has(b.id));
+              persist(filtered, cats, wishlist, profiles);
+              return filtered;
+            });
+          }
+
+          const booksForIndex = currentBooks.map(b => updatedStatus[b.id] ? {...b,conceptsStatus:"done"} : b);
+          const fullIndex = await rebuildConceptsIndex(dirHandle, booksForIndex, apiKey, existing);
+          setConceptsIndex(fullIndex);
+        }finally{
+          setConceptsProcessing(false);
         }
+
+      } else {
+        // Nenhum livro pendente — reconstrói sempre para garantir IDs atuais
+        const index = await rebuildConceptsIndex(dirHandle, books, apiKey, existing);
+        setConceptsIndex(index);
       }
-
-      if(Object.keys(updatedStatus).length > 0){
-        const nb = currentBooks
-          .filter(b => updatedStatus[b.id] || true) // mantém todos, mas filtra deletados no setBooks
-          .map(b => updatedStatus[b.id] ? {...b, conceptsStatus:"done"} : b);
-        setBooks(prev=>{
-          const activeIds = new Set(prev.map(b=>b.id));
-          const filtered = nb.filter(b=>activeIds.has(b.id));
-          persist(filtered, cats, wishlist, profiles);
-          return filtered;
-        });
-      }
-
-      const booksForIndex = currentBooks.map(b => updatedStatus[b.id] ? {...b,conceptsStatus:"done"} : b);
-      const fullIndex = await rebuildConceptsIndex(dirHandle, booksForIndex, apiKey, existing);
-      setConceptsIndex(fullIndex);
-      setConceptsProcessing(false);
-
-    } else {
-      // Nenhum livro pendente — reconstrói sempre para garantir IDs atuais
-      const index = await rebuildConceptsIndex(dirHandle, books, apiKey, existing);
-      setConceptsIndex(index);
+    }catch(e){
+      console.error("openConnections error:", e);
+      addToast("Não foi possível carregar os conceitos", "error");
+    }finally{
       setConceptsLoading(false);
     }
   };
