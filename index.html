@@ -1,6 +1,8 @@
 
 
 
+
+
 <!DOCTYPE html>
 <html lang="pt-BR">
 <head>
@@ -686,22 +688,27 @@ async function extractConceptsForBook(bookId, bookText, bookTitle, apiKey){
 
   const combinedText = blocks.join("\n\n---\n\n").slice(0, 28000); // limite seguro de tokens
 
-  const system = `Você é um assistente especializado em análise de livros. Extraia os conceitos mais importantes do texto fornecido.
+  const system = `Você é um assistente especializado em análise conceitual de livros. Extraia conceitos abstratos, reutilizáveis e transferíveis do texto fornecido.
 
 REGRAS OBRIGATÓRIAS:
 - Retorne entre ${CONCEPTS_PER_BOOK_MIN} e ${CONCEPTS_PER_BOOK_MAX} conceitos
-- Foque em conceitos relevantes: temas, ideias, mecanismos, frameworks
-- Evite palavras genéricas: "história", "pessoas", "coisas", "mundo"
-- Evite nomes próprios, a menos que representem um conceito claro
+- Extraia apenas conceitos abstratos que façam sentido FORA do contexto específico deste livro
+- O conceito deve ser transferível: deve poder aparecer em outros livros de temas diferentes
+- Prefira substantivos ou expressões conceituais curtas (1 a 3 palavras)
+- Aceite 2 ou 3 palavras apenas quando formarem um conceito real e reconhecível: "viés cognitivo", "controle civil", "poder simbólico"
+- Evite palavras genéricas: "história", "pessoas", "coisas", "mundo", "situação"
+- Evite nomes próprios, cargos, países ou eventos específicos
+- Evite formulações narrativas, descritivas ou situacionais: não extraia conclusões de caso, manchetes, problemas pontuais ou acontecimentos
+- Rejeite qualquer item que pareça um insight, uma frase de efeito ou uma descrição de episódio
 - Evite duplicações e variações do mesmo conceito
-- Prefira conceitos reutilizáveis entre livros
-- Cada conceito deve ter 1 a 3 palavras
 - Use SEMPRE português (PT-BR), mesmo que o texto esteja em outro idioma
-- Use lowercase
-- Evite plural desnecessário
+- Use lowercase, evite plural desnecessário
 - Unifique variações: "political propaganda" → "propaganda"
 
-Retorne APENAS um array JSON válido de strings. Exemplo: ["poder", "liderança", "narrativa"]
+EXEMPLOS ACEITOS: liderança, poder, controle civil, transparência, governança, legitimidade, autoconsciência, viés cognitivo, influência, poder simbólico
+EXEMPLOS REJEITADOS: avisos ignorados, risco não comunicado, preparação presidencial, falha de liderança, resposta à emergência
+
+Retorne APENAS um array JSON válido de strings. Exemplo: ["poder", "liderança", "governança"]
 Nenhum texto adicional, nenhum markdown.`;
 
   const response = await callClaude(
@@ -1524,6 +1531,8 @@ const D = {
   arrowUp:"M12 19V5M6 11l6-6 6 6",
   arrowDown:"M12 5v14M6 13l6 6 6-6",
   logoff:"M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9",
+  chevRight:"M9 18l6-6-6-6",
+  chevLeft:"M15 18l-6-6 6-6",
   insights:"M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"
 };
 
@@ -1581,45 +1590,82 @@ const sbLb = {
 };
 
 // ─── BookProcessingStatus ─────────────────────────────
-// Mostra status de sinopse, embeddings e conceitos no header do livro.
-// Aparece apenas quando há algo em processing ou error. Some quando tudo done.
+// Deriva um único estado visível do livro a partir dos campos internos.
+// Prioridade: erro > preparando > pronto.
+
+const ERROR_MESSAGES = {
+  synopsisStatus:   "Não foi possível gerar a sinopse",
+  embeddingsStatus: "Não foi possível preparar a busca inteligente",
+  conceptsStatus:   "Não foi possível preparar as ideias principais",
+};
+
+function deriveBookStatus(book){
+  const fields = ["synopsisStatus", "embeddingsStatus", "conceptsStatus"];
+
+  // 1. Prioridade: qualquer erro
+  const errorField = fields.find(f => book[f] === "error");
+  if(errorField) return { state:"atencao", errorKey: errorField };
+
+  // 2. Qualquer campo ainda processando ou pendente (livro recém adicionado)
+  const processing = fields.some(f => book[f] === "processing" || book[f] === "pending");
+  if(processing) return { state:"preparando" };
+
+  // 3. Verificar se todos os campos estão "done"
+  const allDone = fields.every(f => book[f] === "done");
+  if(!allDone) return { state:"atencao", errorKey: fields.find(f => book[f] !== "done") };
+
+  // 4. Verificar dado real de synopsis (único dado inline no objeto book)
+  if(!book.synopsis || !book.synopsis.trim())
+    return { state:"atencao", errorKey: "synopsisStatus" };
+
+  // 5. Tudo válido
+  return { state:"pronto" };
+}
 
 function BookProcessingStatus({ book, onRetry }){
-  const items = [
-    { key:"synopsisStatus",   label:"Sinopse" },
-    { key:"conceptsStatus",   label:"Conceitos" },
-  ];
-  const relevant = items.filter(it => book[it.key] === "processing" || book[it.key] === "error");
-  if(!relevant.length) return null;
+  const status = deriveBookStatus(book);
+
+  const isError = status.state === "atencao";
+  const isPrep  = status.state === "preparando";
+  const isDone  = status.state === "pronto";
+
+  const bg    = isError ? "rgba(122,30,30,.08)"
+              : isPrep  ? "rgba(122,90,26,.08)"
+              :            "rgba(30,116,76,.07)";
+  const color = isError ? "#7a1e1e"
+              : isPrep  ? "#7a5a1a"
+              :            "#1a6b42";
+  const brd   = isError ? "rgba(122,30,30,.28)"
+              : isPrep  ? "rgba(122,90,26,.25)"
+              :            "rgba(30,116,76,.25)";
+
+  const errorMsg = isError
+    ? (ERROR_MESSAGES[status.errorKey] || "Não foi possível preparar este livro")
+    : null;
 
   return(
-    <div style={{display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
-      {relevant.map(it=>{
-        const isProcessing = book[it.key] === "processing";
-        const isError      = book[it.key] === "error";
-        return(
-          <span key={it.key} style={{
-            display:"flex",alignItems:"center",gap:5,
-            fontSize:11,padding:"2px 9px",borderRadius:10,fontWeight:600,
-            background: isError ? "rgba(122,30,30,.08)" : "rgba(122,90,26,.08)",
-            color: isError ? "#7a1e1e" : "#7a5a1a",
-            border: `1px solid ${isError ? "rgba(122,30,30,.28)" : "rgba(122,90,26,.25)"}`
-          }}>
-            {isProcessing && <span style={{animation:"bob .9s infinite"}}>⟳</span>}
-            {isError && "✗"}
-            {" "}{it.label}
-            {isError && (
-              <button
-                onClick={()=>onRetry(it.key)}
-                style={{background:"none",border:"none",cursor:"pointer",color:"#2d6be4",fontSize:11,fontWeight:700,padding:"0 0 0 4px",textDecoration:"underline"}}
-              >
-                Retry
-              </button>
-            )}
-          </span>
-        );
-      })}
-    </div>
+    <span style={{
+      display:"inline-flex", alignItems:"center", gap:5,
+      fontSize:11, padding:"2px 9px", borderRadius:10, fontWeight:600,
+      background:bg, color, border:`1px solid ${brd}`,
+      whiteSpace:"nowrap"
+    }}>
+      {isPrep && <span style={{animation:"bob .9s infinite"}}>⟳</span>}
+      {isPrep && "Preparando o livro"}
+      {isDone && "Livro pronto para perguntas"}
+      {isError && (
+        <>
+          {errorMsg}
+          {" · "}
+          <button
+            onClick={()=>onRetry(status.errorKey)}
+            style={{background:"none",border:"none",cursor:"pointer",color:"#2d6be4",fontSize:11,fontWeight:700,padding:0,textDecoration:"underline"}}
+          >
+            Tentar novamente
+          </button>
+        </>
+      )}
+    </span>
   );
 }
 
@@ -3055,7 +3101,8 @@ function ChatHistory({sessions,otherSessions,activeId,onSelect,onNew,onDelete,ot
 
 function HomePage({
   visibleBooks, allBooks, wishlist,onAddWish,onEditWish,onDeleteWish,lastBook,onContinue,
-  stats,onOpenBook,onEditBook,onDeleteBook,onClearFilters,hasActiveFilter,onAddBook
+  stats,onOpenBook,onEditBook,onDeleteBook,onClearFilters,hasActiveFilter,onAddBook,
+  onReprocessErrors, reprocessing=false
 }){
   const [sortCol,setSortCol]=useState("addedAt");
   const [sortAsc,setSortAsc]=useState(false);
@@ -3113,16 +3160,35 @@ function HomePage({
           <h1 style={{fontSize:36,fontWeight:700,color:C.ink,lineHeight:1}}>Mynd Library</h1>
           <p style={{fontSize:16,color:C.inkF,marginTop:8}}>Sua biblioteca pessoal.</p>
         </div>
-        <button
-          onClick={onAddBook}
-          style={{
-            display:"flex",alignItems:"center",gap:8,background:C.accent,border:"none",
-            color:C.surf,padding:"11px 16px",borderRadius:9,cursor:"pointer",
-            fontSize:14,fontWeight:700,boxShadow:"0 8px 20px rgba(45,107,228,.18)"
-          }}
-        >
-          <Ico d={D.plus} sz={15} col={C.surf}/> Adicionar livro
-        </button>
+        <div style={{display:"flex",flexDirection:"column",gap:8,alignItems:"stretch"}}>
+          <button
+            onClick={onAddBook}
+            style={{
+              display:"flex",alignItems:"center",justifyContent:"center",gap:8,background:C.accent,border:"none",
+              color:C.surf,padding:"11px 16px",borderRadius:9,cursor:"pointer",
+              fontSize:14,fontWeight:700,boxShadow:"0 8px 20px rgba(45,107,228,.18)"
+            }}
+          >
+            <Ico d={D.plus} sz={15} col={C.surf}/> Adicionar livro
+          </button>
+          <button
+            onClick={onReprocessErrors}
+            disabled={reprocessing}
+            style={{
+              display:"flex",alignItems:"center",justifyContent:"center",gap:8,
+              background:"none",border:`1px solid ${C.border}`,
+              color:reprocessing ? C.inkF : C.inkD,
+              padding:"11px 16px",borderRadius:9,
+              cursor:reprocessing ? "not-allowed" : "pointer",
+              fontSize:14,fontWeight:600
+            }}
+          >
+            {reprocessing
+              ? <><span style={{animation:"bob .9s infinite"}}>⟳</span> Reprocessando…</>
+              : "Reprocessar erros"
+            }
+          </button>
+        </div>
       </div>
 
       {lastBook && (
@@ -3334,11 +3400,11 @@ function HomePage({
 
 // ─── Setup ────────────────────────────────────────────
 
-function Setup({onReady}){
-  const [apiKey,setKey]=useState(()=>localStorage.getItem("mynd_apikey") || "");
-  const [openaiKey,setOpenaiKey]=useState(()=>localStorage.getItem("mynd_openai_apikey") || "");
-  const [dir,setDir]=useState(null);
-  const [dirName,setDirName]=useState("");
+function Setup({onReady, savedProfiles=[], currentDir=null, currentDirName="", currentApiKey="", currentOpenaiKey=""}){
+  const [apiKey,setKey]=useState(()=>currentApiKey || localStorage.getItem("mynd_apikey") || "");
+  const [openaiKey,setOpenaiKey]=useState(()=>currentOpenaiKey || localStorage.getItem("mynd_openai_apikey") || "");
+  const [dir,setDir]=useState(()=>currentDir || null);
+  const [dirName,setDirName]=useState(()=>currentDirName || "");
   const [profile,setProfile]=useState(()=>localStorage.getItem("mynd_user") || "");
   const [err,setErr]=useState("");
 
@@ -3360,21 +3426,20 @@ function Setup({onReady}){
     const idx=await loadIdx(dir);
     const profiles=uniqueCaseInsensitive([...(idx.profiles||[]), name]);
 
-    await saveIdx(dir,{
-      books:idx.books||[],
-      categories:idx.categories||[...DEF_CATS],
-      wishlist:idx.wishlist||[],
-      profiles
-    });
-
-    await idbSet("dir",dir);
-    await wf(dir,"apikey.txt",apiKey.trim());
-
-    // Salva chave OpenAI separada (pode ser vazia se usuário não quiser embeddings)
-    if(openaiKey.trim()){
-      await wf(dir,"openai_apikey.txt",openaiKey.trim());
+    // Só atualiza profiles — não toca em books, categories ou wishlist
+    // para não sobrescrever dados salvos pela sessão anterior
+    if(!idx.profiles?.includes(name)){
+      await saveIdx(dir,{
+        books:idx.books||[],
+        categories:idx.categories||[...DEF_CATS],
+        wishlist:idx.wishlist||[],
+        profiles
+      });
     }
 
+    await idbSet("dir",dir);
+
+    // Chaves salvas apenas em localStorage — não em arquivos na pasta
     localStorage.setItem("mynd_user",name);
     localStorage.setItem("mynd_apikey",apiKey.trim());
     if(openaiKey.trim()) localStorage.setItem("mynd_openai_apikey",openaiKey.trim());
@@ -3394,10 +3459,28 @@ function Setup({onReady}){
 
         <div style={{background:C.surf,border:`1px solid ${C.border}`,borderRadius:12,padding:28,display:"flex",flexDirection:"column",gap:22}}>
           <div>
-            <div style={{...lb,marginBottom:8}}>Nome do perfil</div>
+            <div style={{...lb,marginBottom:8}}>Perfil</div>
+            {savedProfiles.length > 0 && (
+              <div style={{display:"flex",flexWrap:"wrap",gap:6,marginBottom:10}}>
+                {savedProfiles.map(p=>(
+                  <button
+                    key={p}
+                    type="button"
+                    onClick={()=>setProfile(p)}
+                    style={{
+                      padding:"5px 13px",borderRadius:20,fontSize:13,fontWeight:600,cursor:"pointer",
+                      border:`1px solid ${profile===p ? C.accentBrd : C.border}`,
+                      background: profile===p ? "rgba(45,107,228,.08)" : C.surf,
+                      color: profile===p ? C.accent : C.inkD,
+                      transition:"border-color .15s,background .15s,color .15s"
+                    }}
+                  >{p}</button>
+                ))}
+              </div>
+            )}
             <input
               style={fi}
-              placeholder="Digite o nome do perfil"
+              placeholder="Novo perfil ou selecione acima"
               value={profile}
               onChange={e=>setProfile(e.target.value)}
             />
@@ -3548,6 +3631,7 @@ function Sidebar({
   const booksScrollRef=useRef(null);
   const [sortKey,setSortKey]=useState("addedAt");
   const [showSortMenu,setShowSortMenu]=useState(false);
+  const [collapsed,setCollapsed]=useState(false);
 
   const sortedBooks=useMemo(()=>{
     const arr=[...filteredBooks];
@@ -3565,32 +3649,48 @@ function Sidebar({
     <aside
       className="sidebar-shell"
       style={{
-        width:296,
-        minWidth:296,
+        width: collapsed ? 48 : 296,
+        minWidth: collapsed ? 48 : 296,
         background:C.sb,
         borderRight:`1px solid ${C.sbBorder}`,
         display:"flex",
         flexDirection:"column",
-        overflow:"hidden"
+        overflow:"hidden",
+        flexShrink:0,
+        transition:"width .2s ease, min-width .2s ease"
       }}
     >
+      {/* ── Modo recolhido ── */}
+      {collapsed && (
+        <div style={{display:"flex",flexDirection:"column",alignItems:"center",paddingTop:12,flex:1}}>
+          <button
+            onClick={()=>setCollapsed(false)}
+            title="Expandir sidebar"
+            style={{background:"none",border:"none",cursor:"pointer",color:"rgba(255,255,255,.62)",display:"flex",alignItems:"center",justifyContent:"center",padding:8,borderRadius:6,transition:"color .15s"}}
+            onMouseEnter={e=>e.currentTarget.style.color="#fff"}
+            onMouseLeave={e=>e.currentTarget.style.color="rgba(255,255,255,.62)"}
+          >
+            <Ico d={D.chevRight} sz={16} col="currentColor"/>
+          </button>
+        </div>
+      )}
+
+      {/* ── Modo expandido ── */}
+      {!collapsed && <>
       <div style={{padding:"16px 14px 12px",borderBottom:`1px solid ${C.sbBorder}`,flexShrink:0}}>
-        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:4,gap:8}}>
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:8}}>
           <div style={{fontSize:19,fontWeight:700,color:C.sbInk,display:"flex",alignItems:"center",gap:8,whiteSpace:"nowrap"}}>
             <Ico d={D.book} sz={17} col={C.sbInk}/> Mynd Library
           </div>
-          <div style={{display:"flex",alignItems:"center",gap:6,flexShrink:0}}>
-            <ProfileSwitcher userName={userName} onSwitch={switchProfile} profiles={profiles}/>
-            <button
-              title="Sair / Trocar pasta"
-              onClick={onLogoff}
-              style={{background:"none",border:"1px solid rgba(255,255,255,.18)",borderRadius:6,padding:"5px 7px",cursor:"pointer",color:"rgba(255,255,255,.62)",display:"flex",alignItems:"center",transition:"color .15s, border-color .15s"}}
-              onMouseEnter={e=>{ e.currentTarget.style.color="#fff"; e.currentTarget.style.borderColor="rgba(255,255,255,.5)"; }}
-              onMouseLeave={e=>{ e.currentTarget.style.color="rgba(255,255,255,.62)"; e.currentTarget.style.borderColor="rgba(255,255,255,.18)"; }}
-            >
-              <Ico d={D.logoff} sz={13} col="currentColor"/>
-            </button>
-          </div>
+          <button
+            onClick={()=>setCollapsed(true)}
+            title="Recolher sidebar"
+            style={{background:"none",border:"none",cursor:"pointer",color:"rgba(255,255,255,.62)",display:"flex",alignItems:"center",padding:4,borderRadius:5,transition:"color .15s",flexShrink:0}}
+            onMouseEnter={e=>e.currentTarget.style.color="#fff"}
+            onMouseLeave={e=>e.currentTarget.style.color="rgba(255,255,255,.62)"}
+          >
+            <Ico d={D.chevLeft} sz={16} col="currentColor"/>
+          </button>
         </div>
       </div>
 
@@ -3865,12 +3965,10 @@ function Sidebar({
                   <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap",minWidth:0}}>
                     {b.category && <div style={{fontSize:10,color:C.sbInkF}}>{b.category}</div>}
                     {b._hasNotes && <div style={{fontSize:10,color:"#c7e4ff"}}>Notas</div>}
-                    {(b.synopsisStatus==="processing"||b.embeddingsStatus==="processing"||b.conceptsStatus==="processing") && (
-                      <div style={{fontSize:10,color:"#c4962a",animation:"bob .9s infinite"}}>⟳</div>
-                    )}
-                    {(b.synopsisStatus==="error"||b.embeddingsStatus==="error"||b.conceptsStatus==="error") && (
-                      <div style={{fontSize:10,color:"#e07070"}}>✗</div>
-                    )}
+                    {(()=>{ const _b = (selBook?.id===b.id ? selBook : b); const _s = deriveBookStatus(_b).state; return(<>
+                      {_s === "preparando" && <div style={{fontSize:10,color:"#c4962a",animation:"bob .9s infinite"}}>⟳</div>}
+                      {_s === "atencao"    && <div style={{fontSize:10,color:"#e07070"}}>✗</div>}
+                    </>); })()}
                   </div>
 
                   <div style={{display:"flex",gap:4,flexShrink:0}}>
@@ -3947,7 +4045,7 @@ function Sidebar({
         )}
       </div>
 
-      <div style={{padding:"12px",borderTop:`1px solid ${C.sbBorder}`,background:C.sb,flexShrink:0}}>
+      <div style={{padding:"12px",borderTop:`1px solid ${C.sbBorder}`,background:C.sb,flexShrink:0,display:"flex",flexDirection:"column",gap:8}}>
         <input ref={fileRef} type="file" accept=".pdf" style={{display:"none"}} onChange={handleFilePick}/>
         <button
           onClick={()=>fileRef.current?.click()}
@@ -3959,7 +4057,20 @@ function Sidebar({
         >
           <Ico d={D.up} sz={15}/> Adicionar livro (PDF)
         </button>
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",paddingTop:4}}>
+          <ProfileSwitcher userName={userName} onSwitch={switchProfile} profiles={profiles}/>
+          <button
+            title="Sair / Trocar pasta"
+            onClick={onLogoff}
+            style={{background:"none",border:"1px solid rgba(255,255,255,.18)",borderRadius:6,padding:"5px 7px",cursor:"pointer",color:"rgba(255,255,255,.62)",display:"flex",alignItems:"center",transition:"color .15s,border-color .15s"}}
+            onMouseEnter={e=>{ e.currentTarget.style.color="#fff"; e.currentTarget.style.borderColor="rgba(255,255,255,.5)"; }}
+            onMouseLeave={e=>{ e.currentTarget.style.color="rgba(255,255,255,.62)"; e.currentTarget.style.borderColor="rgba(255,255,255,.18)"; }}
+          >
+            <Ico d={D.logoff} sz={13} col="currentColor"/>
+          </button>
+        </div>
       </div>
+      </>}
     </aside>
   );
 }
@@ -4125,7 +4236,7 @@ function ConnectionsPage({
               style={{
                 textAlign:"left",background:C.surf,border:`1px solid ${C.border}`,borderRadius:10,
                 padding:"16px 18px",cursor:"pointer",transition:"border-color .15s,box-shadow .15s",
-                height:104,display:"flex",flexDirection:"column",justifyContent:"flex-start"
+                minHeight:140,display:"flex",flexDirection:"column",justifyContent:"flex-start"
               }}
               onMouseEnter={e=>{
                 e.currentTarget.style.borderColor = C.accentBrd;
@@ -4137,16 +4248,16 @@ function ConnectionsPage({
               }}
             >
               <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",marginBottom:entry.summary?6:0,gap:8}}>
-                <div style={{fontSize:14,fontWeight:700,color:C.ink,textTransform:"capitalize",lineHeight:1.3}}>{concept}</div>
+                <div style={{fontSize:14,fontWeight:700,color:C.ink,textTransform:"capitalize",lineHeight:1.3,minHeight:"calc(1.3em * 2)",display:"-webkit-box",WebkitLineClamp:2,WebkitBoxOrient:"vertical",overflow:"hidden"}}>{concept}</div>
                 <span style={{...tp,fontSize:10,flexShrink:0,marginTop:1}}>
                   {entry.books?.length||0} {(entry.books?.length||0)===1?"livro":"livros"}
                 </span>
               </div>
               {entry.summary && (
-                <p style={{fontSize:12,color:C.inkF,lineHeight:1.55,margin:0,overflow:"hidden",display:"-webkit-box",WebkitLineClamp:2,WebkitBoxOrient:"vertical"}}>{entry.summary}</p>
+                <p style={{fontSize:12,color:C.inkF,lineHeight:1.55,margin:0,overflow:"hidden",display:"-webkit-box",WebkitLineClamp:3,WebkitBoxOrient:"vertical",minHeight:"calc(1.55em * 3)"}}>{entry.summary}</p>
               )}
               {!entry.summary && (
-                <p style={{fontSize:12,color:"transparent",lineHeight:1.55,margin:0,overflow:"hidden",display:"-webkit-box",WebkitLineClamp:2,WebkitBoxOrient:"vertical"}}>‌</p>
+                <p style={{fontSize:12,color:"transparent",lineHeight:1.55,margin:0,overflow:"hidden",display:"-webkit-box",WebkitLineClamp:3,WebkitBoxOrient:"vertical",minHeight:"calc(1.55em * 3)"}}>‌</p>
               )}
             </button>
           ))}
@@ -4419,7 +4530,7 @@ function ConversasInsights({ chatSessions, insights, selBook, activeChatId, user
 
 // ─── Library ──────────────────────────────────────────
 
-function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}){
+function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey, onLogoff}){
   const [books,setBooks] = useState([]);
   const [cats,setCats] = useState([...DEF_CATS]);
   const [profiles,setProfiles] = useState([]);
@@ -4428,10 +4539,12 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
   const [screen,setScreen] = useState("home");
   const [selBook,setSelBook] = useState(null);
   const selBookRef = useRef(null);
+  const bookTextRef = useRef("");
   const screenRef  = useRef("home");
 
   // Keep refs in sync with state for use in async callbacks
   useEffect(()=>{ selBookRef.current = selBook; }, [selBook]);
+  useEffect(()=>{ bookTextRef.current = bookText; }, [bookText]);
   useEffect(()=>{ screenRef.current  = screen;  }, [screen]);
   const [bookText,setBookText] = useState("");
   const [bookEmbeddings,setBookEmbeddings] = useState(null); // embeddings do livro aberto
@@ -4533,7 +4646,61 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
         };
       });
 
-      setBooks(booksWithMeta);
+      // ── Reconciliação bidirecional de status no bootstrap ──
+      // Verifica dados reais e corrige status em ambas as direções sem chamar APIs.
+      const reconciledBooks = await (async () => {
+        const corrected = await Promise.all(booksWithMeta.map(async book => {
+          let patch = {};
+
+          // synopsis: dado inline — sobe para "done" se válido, desce para "pending" se não
+          if(book.synopsis && book.synopsis.trim()){
+            if(book.synopsisStatus !== "done") patch.synopsisStatus = "done";
+          } else {
+            if(book.synopsisStatus === "done") patch.synopsisStatus = "pending";
+          }
+
+          // embeddings: verifica arquivo real em ambas as direções
+          try{
+            const embs = await loadEmbeddings(dirHandle, book.id);
+            if(embs && embs.length){
+              if(book.embeddingsStatus !== "done") patch.embeddingsStatus = "done";
+            } else {
+              if(book.embeddingsStatus === "done") patch.embeddingsStatus = "pending";
+            }
+          }catch{
+            if(book.embeddingsStatus === "done") patch.embeddingsStatus = "pending";
+          }
+
+          // concepts: verifica arquivo real em ambas as direções
+          try{
+            const concepts = await loadBookConcepts(dirHandle, book.id);
+            if(concepts && concepts.length){
+              if(book.conceptsStatus !== "done") patch.conceptsStatus = "done";
+            } else {
+              if(book.conceptsStatus === "done") patch.conceptsStatus = "pending";
+            }
+          }catch{
+            if(book.conceptsStatus === "done") patch.conceptsStatus = "pending";
+          }
+
+          return Object.keys(patch).length ? {...book, ...patch} : book;
+        }));
+
+        const changed = corrected.some((b,i) =>
+          b.synopsisStatus  !== booksWithMeta[i].synopsisStatus  ||
+          b.embeddingsStatus !== booksWithMeta[i].embeddingsStatus ||
+          b.conceptsStatus  !== booksWithMeta[i].conceptsStatus
+        );
+
+        if(changed){
+          booksRef.current=corrected;
+        }
+
+        return corrected;
+      })();
+
+      setBooks(reconciledBooks);
+      booksRef.current = reconciledBooks; // garante ref atualizada antes do persist abaixo
       setCats(idx.categories || [...DEF_CATS]);
       setWishlist(idx.wishlist || []);
       setProfiles(idx.profiles || []);
@@ -4548,7 +4715,7 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
 
       const lastId=localStorage.getItem("mynd_lastBook");
       if(lastId){
-        const found=booksWithMeta.find(x=>x.id===lastId);
+        const found=reconciledBooks.find(x=>x.id===lastId);
         if(found) setLastBook(found);
         else localStorage.removeItem("mynd_lastBook");
       }
@@ -4569,12 +4736,22 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
   },[tagDraft]);
 
   const persistQueueRef = useRef(Promise.resolve());
+  // Refs para TODAS as fontes de estado — persist nunca aceita argumentos externos
+  const booksRef    = useRef([]);
+  const catsRef     = useRef(cats);
+  const wishlistRef = useRef(wishlist);
+  const profilesRef = useRef(profiles);
+  useEffect(()=>{ booksRef.current    = books;    },[books]);
+  useEffect(()=>{ catsRef.current     = cats;     },[cats]);
+  useEffect(()=>{ wishlistRef.current = wishlist;  },[wishlist]);
+  useEffect(()=>{ profilesRef.current = profiles;  },[profiles]);
 
-  const persist=async(nextBooks=books,nextCats=cats,nextWishlist=wishlist,nextProfiles=profiles)=>{
-    const normalizedCats = normalizeCategories(nextCats);
+  // persist: zero argumentos — sempre lê das refs, impossível usar snapshot stale
+  const persist=async()=>{
+    const normalizedCats = normalizeCategories(catsRef.current);
     const validSet = new Set(normalizedCats);
 
-    const booksToStore=nextBooks.map(({_hasNotes,_hasChats,...rest})=>({
+    const booksToStore=(booksRef.current||[]).map(({_hasNotes,_hasChats,...rest})=>({
       ...rest,
       tags: normalizeTags(rest.tags),
       category: validSet.has(normalizeCategory(rest.category)) ? normalizeCategory(rest.category) : ""
@@ -4583,15 +4760,15 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
     const data = {
       books:booksToStore,
       categories:normalizedCats,
-      wishlist:nextWishlist,
-      profiles:nextProfiles
+      wishlist:normalizeWishlist(wishlistRef.current),
+      profiles:uniqueCaseInsensitive(profilesRef.current||[])
     };
 
     return new Promise((resolve, reject) => {
       persistQueueRef.current = persistQueueRef.current
         .then(() => saveIdx(dirHandle, data))
         .then(resolve)
-        .catch(e => { console.warn("persist falhou:", e.message); resolve(); });
+        .catch(e => { console.error("persist falhou:", e.message); reject(e); });
     });
   };
 
@@ -4601,7 +4778,7 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
     if(profiles.includes(trimmed)) return;
     const next=uniqueCaseInsensitive([...profiles,trimmed]);
     setProfiles(next);
-    await persist(books,cats,wishlist,next);
+    await persist();
   };
 
   const bumpStat=async(bookId)=>{
@@ -4741,20 +4918,22 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
 
       setUpProg(90);
 
-      const nb=[...books,book];
-      setBooks(nb);
-      await persist(nb,nextCats,wishlist,profiles);
+      // Adiciona livro ao estado imediatamente
+      setBooks(prev=>{
+        const nb=[...prev,book];
+        booksRef.current=nb; // sincronamente — persist lê isso
+        return nb;
+      });
+      persist().catch(e=>console.error("persist doAdd falhou:",e));
 
       setUpProg(100);
 
-      // Fecha modal imediatamente
-      setTimeout(()=>{
-        setModal(null);
-        setPendingFile(null);
-        setUploading(false);
-        setUpProg(0);
-        setUploadQualityAlert("");
-      },300);
+      // Fecha modal imediatamente — não depende de persist
+      setModal(null);
+      setPendingFile(null);
+      setUploading(false);
+      setUpProg(0);
+      setUploadQualityAlert("");
 
       pushToast("Livro adicionado — processando em background…");
 
@@ -4769,15 +4948,21 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
         try{
           const synopsis = sanitizeSynopsisText(await fetchBookSynopsis(apiKey, bookTitle, bookAuthor));
           setBooks(prev=>{
-            if(!prev.find(b=>b.id===bookId)) return prev; // livro foi deletado
+            if(!prev.find(b=>b.id===bookId)) return prev;
             const nb2=prev.map(b=>b.id===bookId?{...b,synopsis,synopsisStatus:"done"}:b);
-            persist(nb2,nextCats,wishlist,profiles);
+            booksRef.current=nb2;
             return nb2;
           });
+          persist().catch(e=>console.error("persist sinopse done falhou:",e));
           if(selBookRef.current?.id===bookId) setSelBook(p=>p?{...p,synopsis,synopsisStatus:"done"}:p);
         }catch(e){
           console.warn("Sinopse falhou:",e.message);
-          setBooks(prev=>prev.map(b=>b.id===bookId?{...b,synopsisStatus:"error"}:b));
+          setBooks(prev=>{
+            const nb2=prev.map(b=>b.id===bookId?{...b,synopsisStatus:"error"}:b);
+            booksRef.current=nb2;
+            return nb2;
+          });
+          persist().catch(()=>{});
           if(selBookRef.current?.id===bookId) setSelBook(p=>p?{...p,synopsisStatus:"error"}:p);
         }
 
@@ -4789,11 +4974,12 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
             const chunks = splitTextIntoChunks(text);
             const embs = await generateAndSaveEmbeddings(bookId, chunks, dirHandle, openaiKey, ()=>{});
             setBooks(prev=>{
-              if(!prev.find(b=>b.id===bookId)) return prev; // livro foi deletado
+              if(!prev.find(b=>b.id===bookId)) return prev;
               const nb2=prev.map(b=>b.id===bookId?{...b,embeddingsStatus:"done"}:b);
-              persist(nb2,nextCats,wishlist,profiles);
+              booksRef.current=nb2;
               return nb2;
             });
+            persist().catch(e=>console.error("persist embeddings done falhou:",e));
             if(selBookRef.current?.id===bookId){
               setSelBook(p=>p?{...p,embeddingsStatus:"done"}:p);
               setBookEmbeddings(embs);
@@ -4801,7 +4987,12 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
             pushToast("Índice semântico gerado");
           }catch(e){
             console.warn("Embeddings falharam:",e.message);
-            setBooks(prev=>prev.map(b=>b.id===bookId?{...b,embeddingsStatus:"error"}:b));
+            setBooks(prev=>{
+              const nb2=prev.map(b=>b.id===bookId?{...b,embeddingsStatus:"error"}:b);
+              booksRef.current=nb2;
+              return nb2;
+            });
+            persist().catch(()=>{});
             if(selBookRef.current?.id===bookId) setSelBook(p=>p?{...p,embeddingsStatus:"error"}:p);
           }
         }
@@ -4813,17 +5004,31 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
           if(concepts.length > 0){
             await saveBookConcepts(dirHandle, bookId, concepts);
             setBooks(prev=>{
-              if(!prev.find(b=>b.id===bookId)) return prev; // livro foi deletado
+              if(!prev.find(b=>b.id===bookId)) return prev;
               const nb2=prev.map(b=>b.id===bookId?{...b,conceptsStatus:"done"}:b);
-              persist(nb2,nextCats,wishlist,profiles);
+              booksRef.current=nb2;
               return nb2;
             });
+            persist().catch(e=>console.error("persist conceitos done falhou:",e));
+            if(selBookRef.current?.id===bookId) setSelBook(p=>p?{...p,conceptsStatus:"done"}:p);
           } else {
-            setBooks(prev=>prev.map(b=>b.id===bookId?{...b,conceptsStatus:"error"}:b));
+            setBooks(prev=>{
+              const nb2=prev.map(b=>b.id===bookId?{...b,conceptsStatus:"error"}:b);
+              booksRef.current=nb2;
+              return nb2;
+            });
+            persist().catch(()=>{});
+            if(selBookRef.current?.id===bookId) setSelBook(p=>p?{...p,conceptsStatus:"error"}:p);
           }
         }catch(e){
           console.warn("Conceitos falharam:",e.message);
-          setBooks(prev=>prev.map(b=>b.id===bookId?{...b,conceptsStatus:"error"}:b));
+          setBooks(prev=>{
+            const nb2=prev.map(b=>b.id===bookId?{...b,conceptsStatus:"error"}:b);
+            booksRef.current=nb2;
+            return nb2;
+          });
+          persist().catch(()=>{});
+          if(selBookRef.current?.id===bookId) setSelBook(p=>p?{...p,conceptsStatus:"error"}:p);
         }
       }, 500);
 
@@ -4852,18 +5057,24 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
     const finalCategory = nextCats.includes(normalizedCategory) ? normalizedCategory : "";
     const nextTags = normalizeTags(fd.tags);
 
-    const nb = books.map(b => b.id===targetBook.id
-      ? {...b,...fd, category:finalCategory, tags:nextTags}
-      : b
-    );
-    setBooks(nb);
-
     if(selBookRef.current?.id === targetBook.id){
       setSelBook(p => ({...p,...fd, category:finalCategory, tags:nextTags}));
     }
 
-    await persist(nb, nextCats, wishlist, profiles);
-    pushToast("Livro atualizado");
+    const nb = booksRef.current.map(b => b.id===targetBook.id
+      ? {...b, title:trimStr(fd.title), author:trimStr(fd.author), category:finalCategory, tags:nextTags}
+      : b
+    );
+    booksRef.current = nb; // sincronamente — persist() lê isso antes do useEffect rodar
+    setBooks(nb);
+
+    try{
+      await persist();
+      pushToast("Livro atualizado");
+    }catch(e){
+      console.error("doEdit persist falhou:", e.message);
+      pushToast("Erro ao salvar edição. Tente novamente.");
+    }
   };
 
   const doDelete=async(book)=>{
@@ -4889,11 +5100,12 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
       }
     }
 
-    // Filtra o livro e persiste diretamente (bypass da fila para garantir atomicidade)
-    const nb = books.filter(b => b.id !== book.id);
+    // Deriva de booksRef.current (estado real no momento dos awaits acima)
+    const nb = booksRef.current.filter(b => b.id !== book.id);
+    booksRef.current = nb; // sincronamente antes do saveIdx
     setBooks(nb);
 
-    const normalizedCats = normalizeCategories(cats);
+    const normalizedCats = normalizeCategories(catsRef.current);
     const validSet = new Set(normalizedCats);
     const booksToStore = nb.map(({_hasNotes,_hasChats,...rest})=>({
       ...rest,
@@ -4903,8 +5115,8 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
     await saveIdx(dirHandle, {
       books: booksToStore,
       categories: normalizedCats,
-      wishlist,
-      profiles
+      wishlist: wishlistRef.current,
+      profiles: profilesRef.current
     });
     console.log("[doDelete] index.json salvo. Livros restantes:", booksToStore.map(b=>b.title));
 
@@ -4996,7 +5208,7 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
       setSelectedCategory(validSet.has(nextSelected) ? nextSelected : "");
     }
 
-    await persist(nb,normalized,wishlist,profiles);
+    await persist();
     setModal(null);
     pushToast("Categorias atualizadas");
   };
@@ -5011,7 +5223,7 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
       pushToast("Livro adicionado à wishlist");
     }
     setWishlist(nw);
-    await persist(books,cats,nw,profiles);
+    await persist();
     setWishModal(false);
     setWishEdit(null);
   };
@@ -5019,7 +5231,7 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
   const deleteWish=async(id)=>{
     const nw=wishlist.filter(w=>w.id!==id);
     setWishlist(nw);
-    await persist(books,cats,nw,profiles);
+    await persist();
     pushToast("Livro removido da wishlist");
   };
 
@@ -5040,15 +5252,30 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
     setAutoDecision(null);
     setGeneratingEmbeddings(false);
     setChatMode("auto");
+    setChatLoading(false);
 
     await bumpStat(freshBook.id);
 
     const txt=await rf(dirHandle,`${freshBook.id}.txt`);
     setBookText(txt || "");
+    bookTextRef.current = txt || ""; // atualiza ref imediatamente, sem esperar re-render
 
     // Carregar embeddings salvos (se existirem)
     const embs = await loadEmbeddings(dirHandle, freshBook.id);
     setBookEmbeddings(embs);
+
+    // Reconciliação silenciosa: arquivo existe mas status não reflete isso
+    if(embs && embs.length && freshBook.embeddingsStatus !== "done"){
+      const fid = freshBook.id;
+      setBooks(prev=>{
+        if(!prev.find(b=>b.id===fid)) return prev;
+        const nb = prev.map(b=>b.id===fid?{...b,embeddingsStatus:"done"}:b);
+        booksRef.current=nb;
+        return nb;
+      });
+      persist().catch(()=>{});
+      setSelBook(p=>p?{...p,embeddingsStatus:"done"}:p);
+    }
 
     // Verificar se PDF original está disponível
     const deepAvailable = await rf(dirHandle,`${freshBook.id}.pdf`);
@@ -5082,9 +5309,10 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
           setBooks(prev=>{
             if(!prev.find(b=>b.id===fid)) return prev; // livro foi deletado
             const nb=prev.map(b=>b.id===fid?{...b,synopsis,synopsisStatus:"done"}:b);
-            persist(nb,cats,wishlist,profiles);
+            booksRef.current=nb;
             return nb;
           });
+          persist().catch(()=>{});
           setSelBook(p=>p?{...p,synopsis,synopsisStatus:"done"}:p);
         })
         .catch(()=>{
@@ -5114,9 +5342,10 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
           setBooks(prev=>{
             if(!prev.find(b=>b.id===fid)) return prev; // livro foi deletado
             const nb=prev.map(b=>b.id===fid?{...b,embeddingsStatus:"done"}:b);
-            persist(nb,cats,wishlist,profiles);
+            booksRef.current=nb;
             return nb;
           });
+          persist().catch(()=>{});
           setSelBook(p=>p?{...p,embeddingsStatus:"done"}:p);
           pushToast("Índice semântico gerado");
         })
@@ -5165,34 +5394,45 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
     }
   };
 
-  const saveCurrentChat=async(msgs)=>{
-    if(!selBook || !msgs.length) return;
+  const saveCurrentChat=async(msgs, savedBookId, savedActiveChatId, savedChatSessions)=>{
+    if(!savedBookId || !msgs.length) return;
 
-    // Garante que o livro não mudou durante operação assíncrona
-    if(selBookRef.current?.id !== selBook.id) return;
-
+    // Usa bookId fixo capturado no momento do envio — não o closure de selBook
     const firstUser=msgs.find(m=>m.role==="user");
     const title=firstUser ? firstUser.content.slice(0,50) : "Conversa";
     const date=new Date().toLocaleDateString("pt-BR");
-    let sessions=[...chatSessions];
+    let sessions=[...(savedChatSessions||[])];
 
-    if(activeChatId){
-      sessions=sessions.map(s=>s.id===activeChatId ? {...s,messages:msgs,title,date} : s);
+    let chatId = savedActiveChatId;
+    if(chatId){
+      sessions=sessions.map(s=>s.id===chatId ? {...s,messages:msgs,title,date} : s);
     }else{
-      const id=uid();
-      sessions=[{id,title,date,messages:msgs,profileId:userName,bookId:selBook.id}, ...sessions];
-      setActiveChatId(id);
-      localStorage.setItem(`mynd_lastChat_${selBook.id}`,id);
+      chatId=uid();
+      sessions=[{id:chatId,title,date,messages:msgs,profileId:userName,bookId:savedBookId}, ...sessions];
+      // Só atualiza estado se ainda estiver no mesmo livro
+      if(selBookRef.current?.id === savedBookId){
+        setActiveChatId(chatId);
+        localStorage.setItem(`mynd_lastChat_${savedBookId}`,chatId);
+      }
     }
 
-    setChatSessions(sessions);
-    await saveChats(dirHandle,selBook.id,userName,sessions);
+    // Só atualiza sessions se ainda estiver no mesmo livro
+    if(selBookRef.current?.id === savedBookId){
+      setChatSessions(sessions);
+    }
+    await saveChats(dirHandle,savedBookId,userName,sessions);
 
-    if(!selBook._hasChats){
-      const nb=books.map(b=>b.id===selBook.id ? {...b,_hasChats:true} : b);
-      setBooks(nb);
+    // Só atualiza _hasChats se ainda estiver no mesmo livro
+    if(selBookRef.current?.id === savedBookId){
+      setBooks(prev=>{
+        const b = prev.find(x=>x.id===savedBookId);
+        if(!b || b._hasChats) return prev;
+        const nb = prev.map(x=>x.id===savedBookId ? {...x,_hasChats:true} : x);
+        booksRef.current=nb;
+        return nb;
+      });
+      persist().catch(()=>{});
       setSelBook(p=>p?{...p,_hasChats:true}:p);
-      if(nb.find(b=>b.id===selBook.id)) await persist(nb,cats,wishlist,profiles);
     }
   };
 
@@ -5259,84 +5499,93 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
 
     setConceptsLoading(true);
 
-    // Carrega textos e embeddings globais se ainda não carregados
-    if(!globalTexts){
-      const t={};
-      for(const b of books) t[b.id]=await rf(dirHandle,`${b.id}.txt`) || "";
-      setGlobalTexts(t);
-    }
-    if(!globalEmbeddings){
-      const embMap={};
+    try{
+      // Carrega textos e embeddings globais se ainda não carregados
+      if(!globalTexts){
+        const t={};
+        for(const b of books) t[b.id]=await rf(dirHandle,`${b.id}.txt`) || "";
+        setGlobalTexts(t);
+      }
+      if(!globalEmbeddings){
+        const embMap={};
+        await Promise.all(books.map(async b=>{
+          const embs = await loadEmbeddings(dirHandle, b.id);
+          if(embs) embMap[b.id] = embs;
+        }));
+        setGlobalEmbeddings(embMap);
+      }
+
+      // Carrega índice existente
+      const existing = await loadConceptsIndex(dirHandle);
+
+      // Detecta livros pendentes com Promise.all antes de filtrar
+      const hasConceptsMap = {};
       await Promise.all(books.map(async b=>{
-        const embs = await loadEmbeddings(dirHandle, b.id);
-        if(embs) embMap[b.id] = embs;
+        const concepts = await loadBookConcepts(dirHandle, b.id);
+        hasConceptsMap[b.id] = concepts.length > 0;
       }));
-      setGlobalEmbeddings(embMap);
-    }
 
-    // Carrega índice existente
-    const existing = await loadConceptsIndex(dirHandle);
+      // Corrige status de livros que já têm arquivo mas status desatualizado
+      const statusFixNeeded = books.filter(b => b.conceptsStatus !== "done" && hasConceptsMap[b.id]);
+      if(statusFixNeeded.length > 0){
+        const nb = books.map(b => hasConceptsMap[b.id] ? {...b, conceptsStatus:"done"} : b);
+        setBooks(nb);
+        if(nb.length > 0) await persist();
+      }
 
-    // Detecta livros pendentes com Promise.all antes de filtrar
-    const hasConceptsMap = {};
-    await Promise.all(books.map(async b=>{
-      const concepts = await loadBookConcepts(dirHandle, b.id);
-      hasConceptsMap[b.id] = concepts.length > 0;
-    }));
+      const pending = books.filter(b => !hasConceptsMap[b.id]);
 
-    // Corrige status de livros que já têm arquivo mas status desatualizado
-    const statusFixNeeded = books.filter(b => b.conceptsStatus !== "done" && hasConceptsMap[b.id]);
-    if(statusFixNeeded.length > 0){
-      const nb = books.map(b => hasConceptsMap[b.id] ? {...b, conceptsStatus:"done"} : b);
-      setBooks(nb);
-      if(nb.length > 0) await persist(nb, cats, wishlist, profiles);
-    }
-
-    const pending = books.filter(b => !hasConceptsMap[b.id]);
-
-    if(pending.length > 0){
-      setConceptsLoading(false);
-      setConceptsProcessing(true);
-      const partialIndex = await rebuildConceptsIndex(dirHandle, books, apiKey, existing);
-      setConceptsIndex(partialIndex);
-
-      const updatedStatus = {};
-      const currentBooks = [...books];
-
-      for(const book of pending){
+      if(pending.length > 0){
+        setConceptsLoading(false);
+        setConceptsProcessing(true);
         try{
-          const text = globalTexts?.[book.id] || await rf(dirHandle,`${book.id}.txt`) || "";
-          const concepts = await extractConceptsForBook(book.id, text, book.title, apiKey);
-          if(concepts.length > 0){
-            await saveBookConcepts(dirHandle, book.id, concepts);
-            updatedStatus[book.id] = "done";
+          const partialIndex = await rebuildConceptsIndex(dirHandle, books, apiKey, existing);
+          setConceptsIndex(partialIndex);
+
+          const updatedStatus = {};
+          const currentBooks = [...books];
+
+          for(const book of pending){
+            try{
+              const text = globalTexts?.[book.id] || await rf(dirHandle,`${book.id}.txt`) || "";
+              const concepts = await extractConceptsForBook(book.id, text, book.title, apiKey);
+              if(concepts.length > 0){
+                await saveBookConcepts(dirHandle, book.id, concepts);
+                updatedStatus[book.id] = "done";
+              }
+            }catch(e){
+              console.warn(`Conceitos não extraídos para "${book.title}":`, e.message);
+            }
           }
-        }catch(e){
-          console.warn(`Conceitos não extraídos para "${book.title}":`, e.message);
+
+          if(Object.keys(updatedStatus).length > 0){
+            const nb = currentBooks
+              .filter(b => updatedStatus[b.id] || true) // mantém todos, mas filtra deletados no setBooks
+              .map(b => updatedStatus[b.id] ? {...b, conceptsStatus:"done"} : b);
+            setBooks(prev=>{
+              const activeIds = new Set(prev.map(b=>b.id));
+              const filtered = nb.filter(b=>activeIds.has(b.id));
+              booksRef.current=filtered;
+              return filtered;
+            });
+          }
+
+          const booksForIndex = currentBooks.map(b => updatedStatus[b.id] ? {...b,conceptsStatus:"done"} : b);
+          const fullIndex = await rebuildConceptsIndex(dirHandle, booksForIndex, apiKey, existing);
+          setConceptsIndex(fullIndex);
+        }finally{
+          setConceptsProcessing(false);
         }
+
+      } else {
+        // Nenhum livro pendente — reconstrói sempre para garantir IDs atuais
+        const index = await rebuildConceptsIndex(dirHandle, books, apiKey, existing);
+        setConceptsIndex(index);
       }
-
-      if(Object.keys(updatedStatus).length > 0){
-        const nb = currentBooks
-          .filter(b => updatedStatus[b.id] || true) // mantém todos, mas filtra deletados no setBooks
-          .map(b => updatedStatus[b.id] ? {...b, conceptsStatus:"done"} : b);
-        setBooks(prev=>{
-          const activeIds = new Set(prev.map(b=>b.id));
-          const filtered = nb.filter(b=>activeIds.has(b.id));
-          persist(filtered, cats, wishlist, profiles);
-          return filtered;
-        });
-      }
-
-      const booksForIndex = currentBooks.map(b => updatedStatus[b.id] ? {...b,conceptsStatus:"done"} : b);
-      const fullIndex = await rebuildConceptsIndex(dirHandle, booksForIndex, apiKey, existing);
-      setConceptsIndex(fullIndex);
-      setConceptsProcessing(false);
-
-    } else {
-      // Nenhum livro pendente — reconstrói sempre para garantir IDs atuais
-      const index = await rebuildConceptsIndex(dirHandle, books, apiKey, existing);
-      setConceptsIndex(index);
+    }catch(e){
+      console.error("openConnections error:", e);
+      pushToast("Não foi possível carregar os conceitos");
+    }finally{
       setConceptsLoading(false);
     }
   };
@@ -5380,9 +5629,10 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
         const nb = currentBooks
           .filter(b=>activeIds.has(b.id))
           .map(b=>updatedStatus[b.id] ? {...b, conceptsStatus:"done"} : b);
-        persist(nb, cats, wishlist, profiles);
+        booksRef.current=nb;
         return nb;
       });
+      persist().catch(()=>{});
     }
 
     // Reconstrói índice com todos os livros (usa currentBooks para evitar closure stale)
@@ -5524,6 +5774,10 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
 
   const sendBook=async(txt)=>{
     if(!selBook) return;
+    // Captura valores do closure no momento do envio — evita stale em background
+    const savedBookId = selBook.id;
+    const savedActiveChatId = activeChatId;
+    const savedChatSessions = [...chatSessions];
     const next=[...bookMsgs,mkM("user",txt)];
     setBookMsgs(next);
     setChatLoading(true);
@@ -5537,7 +5791,7 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
       let decision = null;
 
       if(chatMode === "auto"){
-        decision = await decideAutoMode(txt, bookText, bookEmbeddings, openaiKey, bookCanUseDeep);
+        decision = await decideAutoMode(txt, bookTextRef.current, bookEmbeddings, openaiKey, bookCanUseDeep);
         setAutoDecision(decision);
         effectiveMode = decision.mode;
       }
@@ -5550,25 +5804,40 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
 
         // Modo profundo distribuído: 65% semânticos + 35% distribuídos
         let deepChunks;
-        const allCh = splitTextIntoChunks(bookText);
+        const allCh = splitTextIntoChunks(bookTextRef.current);
 
         if(bookEmbeddings && openaiKey){
-          const qEmb = decision?.queryEmbedding || await generateEmbedding(txt, openaiKey);
-          const contentMap = {};
-          for(const c of allCh) contentMap[c.index] = c;
-          const scored = bookEmbeddings
-            .map(e => ({ ...contentMap[e.index], score: cosineSimilarity(qEmb, e.embedding) }))
-            .filter(c => c.content)
-            .sort((a,b) => b.score - a.score);
+          // Se o cache de scoredChunks do decideAutoMode está vazio (texto estava vazio na decisão),
+          // recalcula o embedding e os scored chunks com o texto real disponível agora
+          const cachedScored = (decision?.scoredChunks?.length && decision?.allChunks?.length)
+            ? decision.scoredChunks
+            : null;
+
+          let scored;
+          if(cachedScored){
+            scored = cachedScored;
+          } else {
+            const qEmb = decision?.queryEmbedding || await generateEmbedding(txt, openaiKey);
+            const contentMap = {};
+            for(const c of allCh) contentMap[c.index] = c;
+            scored = bookEmbeddings
+              .map(e => ({ ...contentMap[e.index], score: cosineSimilarity(qEmb, e.embedding) }))
+              .filter(c => c.content)
+              .sort((a,b) => b.score - a.score);
+          }
           deepChunks = buildDistributedChunks(allCh, scored, MAX_DEEP_CHUNKS);
         }else{
           // Fallback: distribuído puro sem semântica
           deepChunks = buildDistributedChunks(allCh, [], MAX_DEEP_CHUNKS);
         }
 
-        const system = buildBookContextPrompt(selBook.title, txt, deepChunks);
-        const raw = await callClaude(apiKey, system, next, 1600);
-        r = autoNote + raw;
+        if(!deepChunks.length){
+          r = autoNote + "Não foi possível acessar o conteúdo do livro. Tente reabrir o livro e perguntar novamente.";
+        } else {
+          const system = buildBookContextPrompt(selBook.title, txt, deepChunks);
+          const raw = await callClaude(apiKey, system, next, 1600);
+          r = autoNote + raw;
+        }
 
       }else{
         // ── Modo Básico: busca semântica com embeddings ────────
@@ -5593,22 +5862,31 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
               .sort((a,b) => a.index - b.index);
           }else{
             const qEmb = cachedEmbedding || await generateEmbedding(txt, openaiKey);
-            const allCh = splitTextIntoChunks(bookText);
+            const allCh = splitTextIntoChunks(bookTextRef.current);
             chunks = await semanticSelectChunks(allCh, bookEmbeddings, qEmb, MAX_BOOK_CONTEXT_CHUNKS);
           }
         }else{
           // Fallback: keywords (livros antigos sem embeddings, ou sem chave OpenAI, ou ainda gerando)
-          chunks = selectRelevantChunks(bookText, txt, MAX_BOOK_CONTEXT_CHUNKS);
+          chunks = selectRelevantChunks(bookTextRef.current, txt, MAX_BOOK_CONTEXT_CHUNKS);
         }
 
-        const system = buildBookContextPrompt(selBook.title, txt, chunks);
-        const raw = await callClaude(apiKey, system, next);
-        r = autoNote + indexingNote + raw;
+        // Fallback final: se chunks ainda vazio, tenta keywords direto no texto
+        if(!chunks?.length && bookTextRef.current){
+          chunks = selectRelevantChunks(bookTextRef.current, txt, MAX_BOOK_CONTEXT_CHUNKS);
+        }
+
+        if(!chunks?.length){
+          r = autoNote + indexingNote + "Não foi possível acessar o conteúdo do livro. Tente reabrir o livro e perguntar novamente.";
+        } else {
+          const system = buildBookContextPrompt(selBook.title, txt, chunks);
+          const raw = await callClaude(apiKey, system, next);
+          r = autoNote + indexingNote + raw;
+        }
       }
 
       const final=[...next,mkM("assistant",r)];
       setBookMsgs(final);
-      await saveCurrentChat(final);
+      saveCurrentChat(final, savedBookId, savedActiveChatId, savedChatSessions); // sem await
     }catch(e){
       const msg = e.message || "Erro desconhecido.";
       const isFetch = msg.toLowerCase().includes("failed to fetch") || msg.toLowerCase().includes("networkerror");
@@ -5616,9 +5894,9 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
         ? "Sem conexão com a API. Verifique sua internet ou se há saldo disponível na conta Anthropic."
         : msg;
       setBookMsgs(p=>[...p,mkM("assistant", display)]);
+    }finally{
+      setChatLoading(false);
     }
-
-    setChatLoading(false);
   };
 
   const sendGlobal=async(txt)=>{
@@ -5746,9 +6024,9 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
         ? "Sem conexão com a API. Verifique sua internet ou se há saldo disponível na conta Anthropic."
         : msg;
       setGlobalMsgs(p=>[...p,mkM("assistant", display)]);
+    }finally{
+      setChatLoading(false);
     }
-
-    setChatLoading(false);
   };
 
   const exportChat=(msgs,title)=>{
@@ -5824,10 +6102,134 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
     }
   };
 
-  const handleLogoff=async()=>{
-    if(!confirm("Trocar de perfil? Suas chaves e pasta permanecem salvas.")) return;
-    localStorage.removeItem("mynd_user");
-    window.location.reload();
+  const [reprocessing, setReprocessing] = useState(false);
+
+  const reprocessErrors=async()=>{
+    if(reprocessing) return;
+    setReprocessing(true);
+    pushToast("Verificando livros com erros…");
+
+    try{
+      const tasks = await Promise.all(books.map(async book=>{
+        const needs = { synopsis:false, embeddings:false, concepts:false };
+
+        if(!book.synopsis?.trim() || book.synopsisStatus === "error")
+          needs.synopsis = true;
+
+        // embeddings: sempre valida dado real, independente do status
+        try{
+          const embs = await loadEmbeddings(dirHandle, book.id);
+          if(!embs || !embs.length) needs.embeddings = true;
+        }catch{ needs.embeddings = true; }
+
+        // concepts: sempre valida dado real, independente do status
+        try{
+          const concepts = await loadBookConcepts(dirHandle, book.id);
+          if(!concepts || !concepts.length) needs.concepts = true;
+        }catch{ needs.concepts = true; }
+
+        const hasWork = needs.synopsis || needs.embeddings || needs.concepts;
+        return hasWork ? { book, needs } : null;
+      }));
+
+      const toFix = tasks.filter(Boolean);
+      if(!toFix.length){
+        pushToast("Nenhum erro encontrado");
+        return;
+      }
+
+      pushToast(`Reprocessando ${toFix.length} livro${toFix.length>1?"s":""}…`);
+
+      const CONCURRENCY = 2;
+      for(let i = 0; i < toFix.length; i += CONCURRENCY){
+        const batch = toFix.slice(i, i + CONCURRENCY);
+        await Promise.all(batch.map(async ({ book, needs }) => {
+          const bookId = book.id;
+          const text = await rf(dirHandle, `${bookId}.txt`) || "";
+
+          if(needs.synopsis){
+            setBooks(prev=>prev.map(b=>b.id===bookId?{...b,synopsisStatus:"processing"}:b));
+            if(selBookRef.current?.id===bookId) setSelBook(p=>p?{...p,synopsisStatus:"processing"}:p);
+            try{
+              const synopsis = sanitizeSynopsisText(await fetchBookSynopsis(apiKey, book.title, book.author));
+              setBooks(prev=>{
+                if(!prev.find(b=>b.id===bookId)) return prev;
+                const nb = prev.map(b=>b.id===bookId?{...b,synopsis,synopsisStatus:"done"}:b);
+                booksRef.current=nb;
+                return nb;
+              });
+              persist().catch(()=>{});
+              if(selBookRef.current?.id===bookId) setSelBook(p=>p?{...p,synopsis,synopsisStatus:"done"}:p);
+            }catch(e){
+              console.warn(`[reprocessErrors] sinopse falhou para "${book.title}":`,e.message);
+              setBooks(prev=>prev.map(b=>b.id===bookId?{...b,synopsisStatus:"error"}:b));
+              if(selBookRef.current?.id===bookId) setSelBook(p=>p?{...p,synopsisStatus:"error"}:p);
+            }
+          }
+
+          if(needs.embeddings && openaiKey){
+            setBooks(prev=>prev.map(b=>b.id===bookId?{...b,embeddingsStatus:"processing"}:b));
+            if(selBookRef.current?.id===bookId) setSelBook(p=>p?{...p,embeddingsStatus:"processing"}:p);
+            try{
+              const chunks = splitTextIntoChunks(text);
+              const embs = await generateAndSaveEmbeddings(bookId, chunks, dirHandle, openaiKey, ()=>{});
+              setBooks(prev=>{
+                if(!prev.find(b=>b.id===bookId)) return prev;
+                const nb = prev.map(b=>b.id===bookId?{...b,embeddingsStatus:"done"}:b);
+                booksRef.current=nb;
+                return nb;
+              });
+              persist().catch(()=>{});
+              if(selBookRef.current?.id===bookId){
+                setSelBook(p=>p?{...p,embeddingsStatus:"done"}:p);
+                setBookEmbeddings(embs);
+              }
+            }catch(e){
+              console.warn(`[reprocessErrors] embeddings falharam para "${book.title}":`,e.message);
+              setBooks(prev=>prev.map(b=>b.id===bookId?{...b,embeddingsStatus:"error"}:b));
+              if(selBookRef.current?.id===bookId) setSelBook(p=>p?{...p,embeddingsStatus:"error"}:p);
+            }
+          }
+
+          if(needs.concepts){
+            setBooks(prev=>prev.map(b=>b.id===bookId?{...b,conceptsStatus:"processing"}:b));
+            if(selBookRef.current?.id===bookId) setSelBook(p=>p?{...p,conceptsStatus:"processing"}:p);
+            try{
+              const concepts = await extractConceptsForBook(bookId, text, book.title, apiKey);
+              if(concepts.length > 0){
+                await saveBookConcepts(dirHandle, bookId, concepts);
+                setBooks(prev=>{
+                  if(!prev.find(b=>b.id===bookId)) return prev;
+                  const nb = prev.map(b=>b.id===bookId?{...b,conceptsStatus:"done"}:b);
+                  booksRef.current=nb;
+                  return nb;
+                });
+                persist().catch(()=>{});
+                if(selBookRef.current?.id===bookId) setSelBook(p=>p?{...p,conceptsStatus:"done"}:p);
+              } else {
+                setBooks(prev=>prev.map(b=>b.id===bookId?{...b,conceptsStatus:"error"}:b));
+                if(selBookRef.current?.id===bookId) setSelBook(p=>p?{...p,conceptsStatus:"error"}:p);
+              }
+            }catch(e){
+              console.warn(`[reprocessErrors] conceitos falharam para "${book.title}":`,e.message);
+              setBooks(prev=>prev.map(b=>b.id===bookId?{...b,conceptsStatus:"error"}:b));
+              if(selBookRef.current?.id===bookId) setSelBook(p=>p?{...p,conceptsStatus:"error"}:p);
+            }
+          }
+        }));
+      }
+
+      pushToast("Reprocessamento concluído");
+    }catch(e){
+      console.error("[reprocessErrors]",e);
+      pushToast("Erro durante o reprocessamento");
+    }finally{
+      setReprocessing(false);
+    }
+  };
+
+  const handleLogoff=()=>{
+    onLogoff?.();
   };
 
   const handleRetry=async(statusKey)=>{
@@ -5839,9 +6241,10 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
       setBooks(prev=>{
         if(!prev.find(b=>b.id===book.id)) return prev;
         const nb=prev.map(b=>b.id===book.id?{...b,[statusKey]:s}:b);
-        persist(nb,cats,wishlist,profiles);
+        booksRef.current=nb;
         return nb;
       });
+      persist().catch(()=>{});
       setSelBook(p=>p?{...p,[statusKey]:s}:p);
     };
 
@@ -5853,9 +6256,10 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
         setBooks(prev=>{
           if(!prev.find(b=>b.id===book.id)) return prev;
           const nb=prev.map(b=>b.id===book.id?{...b,synopsis,synopsisStatus:"done"}:b);
-          persist(nb,cats,wishlist,profiles);
+          booksRef.current=nb;
           return nb;
         });
+        persist().catch(()=>{});
         setSelBook(p=>p?{...p,synopsis,synopsisStatus:"done"}:p);
         pushToast("Sinopse regenerada");
       }catch(e){
@@ -5891,7 +6295,7 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
     const nb=books.map(b=>b.id===bookId ? {...b,_hasNotes:hasNotes} : b);
     setBooks(nb);
     if(selBook?.id===bookId) setSelBook(p=>p?{...p,_hasNotes:hasNotes}:p);
-    if(nb.find(b=>b.id===bookId)) await persist(nb,cats,wishlist,profiles);
+    if(nb.find(b=>b.id===bookId)) await persist();
   };
 
   const globalSuggestionItems = [
@@ -5965,6 +6369,8 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
             onClearFilters={clearFilters}
             hasActiveFilter={hasActiveFilter}
             onAddBook={()=>fileRef.current?.click()}
+            onReprocessErrors={reprocessErrors}
+            reprocessing={reprocessing}
           />
         )}
 
@@ -5998,23 +6404,6 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey}
                     }
                   </span>
 
-                  {/* Badge de índice semântico — baseado exclusivamente em embeddingsStatus */}
-                  {selBook.embeddingsStatus === "processing" && (
-                    <>
-                      <span style={{fontSize:12,color:C.inkF}}>•</span>
-                      <span style={{fontSize:11,padding:"2px 8px",borderRadius:10,background:"rgba(122,90,26,.08)",color:C.gold,border:`1px solid ${C.goldBrd}`,fontWeight:600,display:"flex",alignItems:"center",gap:4}}>
-                        <span style={{animation:"bob .9s infinite"}}>⟳</span> Preparando busca semântica…
-                      </span>
-                    </>
-                  )}
-                  {selBook.embeddingsStatus === "done" && (
-                    <>
-                      <span style={{fontSize:12,color:C.inkF}}>•</span>
-                      <span style={{fontSize:11,padding:"2px 8px",borderRadius:10,background:"rgba(30,92,46,.1)",color:"#1e5c2e",border:"1px solid rgba(30,92,46,.22)",fontWeight:600,display:"flex",alignItems:"center",gap:4}}>
-                        <Ico d={D.check} sz={11} col="#1e5c2e"/> Índice semântico ativo
-                      </span>
-                    </>
-                  )}
                   <BookProcessingStatus book={selBook} onRetry={handleRetry}/>
                 </div>
               </div>
@@ -6279,6 +6668,7 @@ function Root(){
   const [openaiKey,setOpenaiKey]=useState("");
   const [userName,setUser]=useState("");
   const [savedProfiles,setSavedProfiles]=useState([]);
+  const [sessionKey,setSessionKey]=useState(0);
 
   useEffect(()=>{
     if(!window.showDirectoryPicker){
@@ -6298,8 +6688,8 @@ function Root(){
       try{
         const perm=await dh.queryPermission({mode:"readwrite"});
         if(perm==="granted"){
-          const k=savedKey || (await rf(dh,"apikey.txt")) || "";
-          const oaik=savedOpenaiKey || (await rf(dh,"openai_apikey.txt")) || "";
+          const k=savedKey || "";
+          const oaik=savedOpenaiKey || "";
           if(!k?.trim()){
             setPhase("setup");
             return;
@@ -6308,14 +6698,12 @@ function Root(){
           setKey(k.trim());
           setOpenaiKey(oaik.trim());
           if(!savedUser){
-            // Carrega perfis salvos do index para mostrar seleção
             try{
               const idxTxt = await rf(dh,"index.json");
               const idx = idxTxt ? JSON.parse(idxTxt) : {};
-              const profiles = uniqueCaseInsensitive(idx?.profiles || []);
-              setSavedProfiles(profiles);
+              setSavedProfiles(uniqueCaseInsensitive(idx?.profiles || []));
             }catch{ setSavedProfiles([]); }
-            setPhase("profile_select");
+            setPhase("setup");
             return;
           }
           setUser(savedUser);
@@ -6358,8 +6746,8 @@ function Root(){
           setPhase("setup");
           return;
         }
-        const k=window._pendingKey || (await rf(dh,"apikey.txt")) || "";
-        const oaik=window._pendingOpenaiKey || (await rf(dh,"openai_apikey.txt")) || "";
+        const k=window._pendingKey || "";
+        const oaik=window._pendingOpenaiKey || "";
         const u=window._pendingUser;
         if(!k || !u){
           setPhase("setup");
@@ -6394,70 +6782,14 @@ function Root(){
     );
   }
 
-  if(phase==="profile_select"){
-    const [draft, setDraft] = React.useState("");
-    const enter = (name) => {
-      const trimmed = (name||"").trim();
-      if(!trimmed) return;
-      localStorage.setItem("mynd_user", trimmed);
-      setUser(trimmed);
-      setPhase("app");
-    };
-    return(
-      <div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",background:C.bg,padding:40}}>
-        <div style={{textAlign:"center",maxWidth:400}}>
-          <div style={{fontSize:28,color:C.ink,marginBottom:6,fontWeight:700}}>Bem-vindo de volta</div>
-          <p style={{fontSize:15,color:C.inkF,lineHeight:1.7,marginBottom:28}}>Escolha um perfil ou entre com um novo nome.</p>
-
-          {savedProfiles.length > 0 && (
-            <div style={{display:"flex",flexDirection:"column",gap:8,marginBottom:24}}>
-              {savedProfiles.map(p=>(
-                <button
-                  key={p}
-                  onClick={()=>enter(p)}
-                  style={{
-                    width:"100%",padding:"12px 18px",borderRadius:8,border:`1px solid ${C.border}`,
-                    background:C.surf,cursor:"pointer",fontSize:15,fontWeight:600,color:C.ink,
-                    display:"flex",alignItems:"center",gap:10,transition:"border-color .15s,box-shadow .15s"
-                  }}
-                  onMouseEnter={e=>{ e.currentTarget.style.borderColor=C.accentBrd; e.currentTarget.style.boxShadow=`0 2px 12px rgba(45,107,228,.1)`; }}
-                  onMouseLeave={e=>{ e.currentTarget.style.borderColor=C.border; e.currentTarget.style.boxShadow="none"; }}
-                >
-                  <span style={{width:32,height:32,borderRadius:"50%",background:C.accent,color:"#fff",display:"flex",alignItems:"center",justifyContent:"center",fontWeight:700,fontSize:14,flexShrink:0}}>
-                    {p.charAt(0).toUpperCase()}
-                  </span>
-                  {p}
-                </button>
-              ))}
-            </div>
-          )}
-
-          <div style={{display:"flex",gap:8}}>
-            <input
-              value={draft}
-              onChange={e=>setDraft(e.target.value)}
-              onKeyDown={e=>{ if(e.key==="Enter") enter(draft); }}
-              placeholder="Novo perfil…"
-              style={{flex:1,background:C.surf,border:`1px solid ${C.border}`,borderRadius:7,padding:"10px 12px",color:C.ink,fontSize:14,outline:"none"}}
-            />
-            <button onClick={()=>enter(draft)} disabled={!draft.trim()} style={{...bP(!draft.trim()),padding:"10px 18px"}}>
-              Entrar
-            </button>
-          </div>
-
-          <button onClick={()=>{ setPhase("setup"); }} style={{...bG,marginTop:16,fontSize:13,width:"100%"}}>
-            Trocar pasta ou chaves
-          </button>
-        </div>
-      </div>
-    );
-  }
+  // profile_select unificado em setup
+  if(phase==="profile_select") setPhase("setup");
 
   if(phase==="setup"){
-    return <Setup onReady={(dh,k,name,oaik)=>{ setDir(dh); setKey(k); setUser(name); setOpenaiKey(oaik||""); setPhase("app"); }} />;
+    return <Setup onReady={(dh,k,name,oaik)=>{ setDir(dh); setKey(k); setUser(name); setOpenaiKey(oaik||""); setSessionKey(s=>s+1); setPhase("app"); }} savedProfiles={savedProfiles} currentDir={dirHandle} currentDirName={dirHandle?.name||""} currentApiKey={apiKey} currentOpenaiKey={openaiKey}/>;
   }
 
-  return <Library dirHandle={dirHandle} apiKey={apiKey} userName={userName} openaiKey={openaiKey}/>;
+  return <Library key={sessionKey} dirHandle={dirHandle} apiKey={apiKey} userName={userName} openaiKey={openaiKey} onLogoff={()=>setPhase("setup")}/>;
 }
 
 ReactDOM.createRoot(document.getElementById("root")).render(<Root/>);
