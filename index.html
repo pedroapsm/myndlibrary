@@ -257,6 +257,13 @@ function sanitizeSummaryText(text=""){
     .trim();
 }
 
+function deriveInsightTitle(question=""){
+  const clean = question.trim().replace(/[?!.]+$/, "").trim();
+  const words = clean.split(/\s+/).slice(0, 5);
+  const title = words.join(" ");
+  return title.charAt(0).toUpperCase() + title.slice(1);
+}
+
 function renderSynopsis(text=""){
   const comma = text.indexOf(",");
   if(comma === -1 || comma > 120) return <span>{text}</span>;
@@ -2746,29 +2753,26 @@ function ChatArea({messages,loading,onSend,placeholder,emptyNode,onExport,mode,s
 function SaveInsightModal({ onSave, onClose, msg, apiKey }){
   const [name, setName] = useState("");
   const [generating, setGenerating] = useState(true);
+  const userEditedRef = useRef(false);
   const inputRef = useRef();
 
   useEffect(()=>{
+    if(!apiKey || !msg?.questionText){ setGenerating(false); setTimeout(()=>inputRef.current?.focus(), 50); return; }
     let cancelled = false;
-    const generate = async()=>{
-      if(!apiKey || !msg?.content) { setGenerating(false); setTimeout(()=>inputRef.current?.focus(),50); return; }
-      try{
-        const title = await callClaude(
-          apiKey,
-          `Gere um título curto (máx 5 palavras) em português para este insight, baseado na pergunta e resposta. Retorne APENAS o título, sem aspas, sem pontuação no final.`,
-          [{ role:"user", content:`Pergunta: ${(msg.questionText||"").slice(0,200)}\nResposta: ${msg.content.slice(0,300)}` }],
-          30
-        );
-        if(!cancelled){
+    callClaude(
+      apiKey,
+      `Gere um título curto (máx 5 palavras) em português baseado nesta pergunta. Direto ao ponto, sem pontuação no final. Retorne APENAS o título.`,
+      [{ role:"user", content: msg.questionText.slice(0, 200) }],
+      30
+    ).then(title=>{
+      if(!cancelled && title?.trim()){
+        setGenerating(false);
+        if(!userEditedRef.current){
           setName(title.trim());
-          setGenerating(false);
-          setTimeout(()=>{ if(inputRef.current){ inputRef.current.focus(); inputRef.current.select(); }},50);
+          setTimeout(()=>{ if(inputRef.current){ inputRef.current.focus(); inputRef.current.select(); }}, 30);
         }
-      }catch{
-        if(!cancelled){ setGenerating(false); setTimeout(()=>inputRef.current?.focus(),50); }
       }
-    };
-    generate();
+    }).catch(()=>{ if(!cancelled) setGenerating(false); });
     return ()=>{ cancelled=true; };
   },[]);
 
@@ -2781,16 +2785,16 @@ function SaveInsightModal({ onSave, onClose, msg, apiKey }){
         <div style={{...lb, marginBottom:6}}>Nome do insight</div>
         <input
           ref={inputRef}
-          value={generating ? "" : name}
-          onChange={e=>setName(e.target.value)}
-          onKeyDown={e=>{ if(e.key==="Enter" && name.trim() && !generating) onSave(name.trim()); }}
+          value={name}
+          onChange={e=>{ userEditedRef.current=true; setName(e.target.value); }}
+          onKeyDown={e=>{ if(e.key==="Enter" && name.trim()) onSave(name.trim()); }}
           placeholder={generating ? "Gerando sugestão…" : "Nome do insight"}
-          disabled={generating}
-          style={{...fi, marginBottom:18, opacity: generating ? 0.6 : 1}}
+          style={{...fi, marginBottom:18}}
+          autoFocus
         />
         <div style={{display:"flex", gap:10, justifyContent:"flex-end"}}>
           <button style={bG} onClick={onClose}>Cancelar</button>
-          <button style={bP(!name.trim()||generating)} disabled={!name.trim()||generating} onClick={()=>onSave(name.trim())}>
+          <button style={bP(!name.trim())} disabled={!name.trim()} onClick={()=>onSave(name.trim())}>
             Salvar
           </button>
         </div>
