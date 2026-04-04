@@ -4981,12 +4981,15 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey,
               persist(nb2,nextCats,wishlist,profiles);
               return nb2;
             });
+            if(selBookRef.current?.id===bookId) setSelBook(p=>p?{...p,conceptsStatus:"done"}:p);
           } else {
             setBooks(prev=>prev.map(b=>b.id===bookId?{...b,conceptsStatus:"error"}:b));
+            if(selBookRef.current?.id===bookId) setSelBook(p=>p?{...p,conceptsStatus:"error"}:p);
           }
         }catch(e){
           console.warn("Conceitos falharam:",e.message);
           setBooks(prev=>prev.map(b=>b.id===bookId?{...b,conceptsStatus:"error"}:b));
+          if(selBookRef.current?.id===bookId) setSelBook(p=>p?{...p,conceptsStatus:"error"}:p);
         }
       }, 500);
 
@@ -5825,9 +5828,9 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey,
         ? "Sem conexão com a API. Verifique sua internet ou se há saldo disponível na conta Anthropic."
         : msg;
       setBookMsgs(p=>[...p,mkM("assistant", display)]);
+    }finally{
+      setChatLoading(false);
     }
-
-    setChatLoading(false);
   };
 
   const sendGlobal=async(txt)=>{
