@@ -5737,22 +5737,37 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey,
         const allCh = splitTextIntoChunks(bookTextRef.current);
 
         if(bookEmbeddings && openaiKey){
-          const qEmb = decision?.queryEmbedding || await generateEmbedding(txt, openaiKey);
-          const contentMap = {};
-          for(const c of allCh) contentMap[c.index] = c;
-          const scored = bookEmbeddings
-            .map(e => ({ ...contentMap[e.index], score: cosineSimilarity(qEmb, e.embedding) }))
-            .filter(c => c.content)
-            .sort((a,b) => b.score - a.score);
+          // Se o cache de scoredChunks do decideAutoMode está vazio (texto estava vazio na decisão),
+          // recalcula o embedding e os scored chunks com o texto real disponível agora
+          const cachedScored = (decision?.scoredChunks?.length && decision?.allChunks?.length)
+            ? decision.scoredChunks
+            : null;
+
+          let scored;
+          if(cachedScored){
+            scored = cachedScored;
+          } else {
+            const qEmb = decision?.queryEmbedding || await generateEmbedding(txt, openaiKey);
+            const contentMap = {};
+            for(const c of allCh) contentMap[c.index] = c;
+            scored = bookEmbeddings
+              .map(e => ({ ...contentMap[e.index], score: cosineSimilarity(qEmb, e.embedding) }))
+              .filter(c => c.content)
+              .sort((a,b) => b.score - a.score);
+          }
           deepChunks = buildDistributedChunks(allCh, scored, MAX_DEEP_CHUNKS);
         }else{
           // Fallback: distribuído puro sem semântica
           deepChunks = buildDistributedChunks(allCh, [], MAX_DEEP_CHUNKS);
         }
 
-        const system = buildBookContextPrompt(selBook.title, txt, deepChunks);
-        const raw = await callClaude(apiKey, system, next, 1600);
-        r = autoNote + raw;
+        if(!deepChunks.length){
+          r = autoNote + "Não foi possível acessar o conteúdo do livro. Tente reabrir o livro e perguntar novamente.";
+        } else {
+          const system = buildBookContextPrompt(selBook.title, txt, deepChunks);
+          const raw = await callClaude(apiKey, system, next, 1600);
+          r = autoNote + raw;
+        }
 
       }else{
         // ── Modo Básico: busca semântica com embeddings ────────
@@ -5785,9 +5800,18 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey,
           chunks = selectRelevantChunks(bookTextRef.current, txt, MAX_BOOK_CONTEXT_CHUNKS);
         }
 
-        const system = buildBookContextPrompt(selBook.title, txt, chunks);
-        const raw = await callClaude(apiKey, system, next);
-        r = autoNote + indexingNote + raw;
+        // Fallback final: se chunks ainda vazio, tenta keywords direto no texto
+        if(!chunks?.length && bookTextRef.current){
+          chunks = selectRelevantChunks(bookTextRef.current, txt, MAX_BOOK_CONTEXT_CHUNKS);
+        }
+
+        if(!chunks?.length){
+          r = autoNote + indexingNote + "Não foi possível acessar o conteúdo do livro. Tente reabrir o livro e perguntar novamente.";
+        } else {
+          const system = buildBookContextPrompt(selBook.title, txt, chunks);
+          const raw = await callClaude(apiKey, system, next);
+          r = autoNote + indexingNote + raw;
+        }
       }
 
       const final=[...next,mkM("assistant",r)];
