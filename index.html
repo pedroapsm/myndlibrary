@@ -5057,12 +5057,20 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey,
     const finalCategory = nextCats.includes(normalizedCategory) ? normalizedCategory : "";
     const nextTags = normalizeTags(fd.tags);
 
+    // Apenas campos editáveis — nunca tocar em status, synopsis, ou metadados de processamento
+    const editedFields = {
+      title: trimStr(fd.title),
+      author: trimStr(fd.author),
+      category: finalCategory,
+      tags: nextTags
+    };
+
     if(selBookRef.current?.id === targetBook.id){
-      setSelBook(p => ({...p,...fd, category:finalCategory, tags:nextTags}));
+      setSelBook(p => ({...p, ...editedFields}));
     }
 
     const nb = booksRef.current.map(b => b.id===targetBook.id
-      ? {...b, title:trimStr(fd.title), author:trimStr(fd.author), category:finalCategory, tags:nextTags}
+      ? {...b, ...editedFields}
       : b
     );
     booksRef.current = nb; // sincronamente — persist() lê isso antes do useEffect rodar
@@ -5084,27 +5092,37 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey,
       : `Remover "${book.title}"?`;
     if(!confirm(confirmMsg)) return;
 
-    await rmf(dirHandle,`${book.id}.txt`);
-    await rmf(dirHandle,embeddingsFileName(book.id));
-
-    const knownProfiles=Array.from(new Set([...(profiles||[]), userName].filter(Boolean)));
-    for(const p of knownProfiles){
-      await rmf(dirHandle,noteFileName(book.id,p));
-      await rmf(dirHandle,chatFileName(book.id,p));
-    }
-
-    const names=await listDirFiles(dirHandle);
-    for(const name of names){
-      if(name.startsWith(`${book.id}_notes_`) || name.startsWith(`${book.id}_chats_`)){
-        await rmf(dirHandle,name);
-      }
-    }
-
-    // Deriva de booksRef.current (estado real no momento dos awaits acima)
+    // ── 1. Atualizar UI imediatamente — antes de qualquer await ──
     const nb = booksRef.current.filter(b => b.id !== book.id);
-    booksRef.current = nb; // sincronamente antes do saveIdx
+    booksRef.current = nb;
     setBooks(nb);
 
+    const isCurrentBook = selBookRef.current?.id === book.id;
+    const isLastBook = lastBook?.id === book.id;
+
+    if(isCurrentBook){
+      setSelBook(null);
+      setBookText("");
+      bookTextRef.current = "";
+      setBookEmbeddings(null);
+      setBookMsgs([]);
+      setChatSessions([]);
+      setOtherSessions({});
+      setActiveChatId(null);
+      setChatLoading(false);
+      setGeneratingEmbeddings(false);
+      setScreen("home");
+    }
+
+    if(isCurrentBook || isLastBook){
+      setLastBook(null);
+      localStorage.removeItem("mynd_lastBook");
+    }
+
+    localStorage.removeItem(`mynd_lastChat_${book.id}`);
+    pushToast("Livro excluído");
+
+    // ── 2. Persistir index imediatamente com livro removido ──
     const normalizedCats = normalizeCategories(catsRef.current);
     const validSet = new Set(normalizedCats);
     const booksToStore = nb.map(({_hasNotes,_hasChats,...rest})=>({
@@ -5118,63 +5136,53 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey,
       wishlist: wishlistRef.current,
       profiles: profilesRef.current
     });
-    console.log("[doDelete] index.json salvo. Livros restantes:", booksToStore.map(b=>b.title));
 
-    setStats(prev=>{
-      const nextConsultations={...prev.consultations};
-      delete nextConsultations[book.id];
-      const next={...prev, consultations:nextConsultations};
-      saveStats(dirHandle,next);
-      return next;
-    });
+    // ── 3. Limpeza de arquivos em background (não bloqueia UI) ──
+    const cleanup = async () => {
+      await rmf(dirHandle,`${book.id}.txt`);
+      await rmf(dirHandle,embeddingsFileName(book.id));
 
-    // Remove insights relacionados a este livro (todos os perfis)
-    const knownProfilesForInsights = Array.from(new Set([...(profiles||[]), userName].filter(Boolean)));
-    for(const p of knownProfilesForInsights){
-      const pInsights = await loadInsights(dirHandle, p);
-      const relatedIds = new Set(pInsights.filter(ins=>ins.bookId===book.id).map(ins=>ins.id));
-      if(relatedIds.size > 0){
-        const nextIns = pInsights.filter(ins=>ins.bookId!==book.id);
-        await saveInsights(dirHandle, p, nextIns);
-        // Remove embeddings relacionados
-        const pEmbs = await loadInsightEmbeddings(dirHandle, p);
-        let changed = false;
-        for(const id of relatedIds){ if(pEmbs[id]){ delete pEmbs[id]; changed=true; } }
-        if(changed) await saveInsightEmbeddings(dirHandle, p, pEmbs);
-        // Atualiza state se for o perfil atual
-        if(p === userName){
-          setInsights(nextIns);
-          if(changed) setInsightEmbeddings({...pEmbs});
+      const knownProfiles=Array.from(new Set([...(profiles||[]), userName].filter(Boolean)));
+      for(const p of knownProfiles){
+        await rmf(dirHandle,noteFileName(book.id,p));
+        await rmf(dirHandle,chatFileName(book.id,p));
+      }
+
+      const names=await listDirFiles(dirHandle);
+      for(const name of names){
+        if(name.startsWith(`${book.id}_notes_`) || name.startsWith(`${book.id}_chats_`)){
+          await rmf(dirHandle,name);
         }
       }
-    }
 
-    // Usa refs para garantir valores atuais (evita closure stale)
-    const currentScreen  = screenRef.current;
-    const currentSelBook = selBookRef.current;
+      setStats(prev=>{
+        const nextConsultations={...prev.consultations};
+        delete nextConsultations[book.id];
+        const next={...prev, consultations:nextConsultations};
+        saveStats(dirHandle,next);
+        return next;
+      });
 
-    const isCurrentBook = currentSelBook?.id === book.id;
-    const isLastBook = lastBook?.id === book.id;
+      const knownProfilesForInsights = Array.from(new Set([...(profiles||[]), userName].filter(Boolean)));
+      for(const p of knownProfilesForInsights){
+        const pInsights = await loadInsights(dirHandle, p);
+        const relatedIds = new Set(pInsights.filter(ins=>ins.bookId===book.id).map(ins=>ins.id));
+        if(relatedIds.size > 0){
+          const nextIns = pInsights.filter(ins=>ins.bookId!==book.id);
+          await saveInsights(dirHandle, p, nextIns);
+          const pEmbs = await loadInsightEmbeddings(dirHandle, p);
+          let changed = false;
+          for(const id of relatedIds){ if(pEmbs[id]){ delete pEmbs[id]; changed=true; } }
+          if(changed) await saveInsightEmbeddings(dirHandle, p, pEmbs);
+          if(p === userName){
+            setInsights(nextIns);
+            if(changed) setInsightEmbeddings({...pEmbs});
+          }
+        }
+      }
+    };
 
-    if(isCurrentBook){
-      setSelBook(null);
-      setBookText("");
-      setBookEmbeddings(null);
-      setBookMsgs([]);
-      setChatSessions([]);
-      setOtherSessions({});
-      setActiveChatId(null);
-      setGeneratingEmbeddings(false);
-      setScreen("home");
-    }
-
-    if(isCurrentBook || isLastBook){
-      setLastBook(null);
-      localStorage.removeItem("mynd_lastBook");
-    }
-
-    localStorage.removeItem(`mynd_lastChat_${book.id}`);
-    pushToast("Livro excluído");
+    cleanup().catch(e=>console.warn("[doDelete] cleanup falhou:", e.message));
   };
 
   const saveCats=async(payload)=>{
