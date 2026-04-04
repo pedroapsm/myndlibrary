@@ -1607,7 +1607,15 @@ function deriveBookStatus(book){
   const processing = fields.some(f => book[f] === "processing");
   if(processing) return { state:"preparando" };
 
-  // 3. Tudo pronto
+  // 3. Verificar se todos os campos estão "done"
+  const allDone = fields.every(f => book[f] === "done");
+  if(!allDone) return { state:"atencao", errorKey: fields.find(f => book[f] !== "done") };
+
+  // 4. Verificar dado real de synopsis (único dado inline no objeto book)
+  if(!book.synopsis || !book.synopsis.trim())
+    return { state:"atencao", errorKey: "synopsisStatus" };
+
+  // 5. Tudo válido
   return { state:"pronto" };
 }
 
@@ -3918,12 +3926,10 @@ function Sidebar({
                   <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap",minWidth:0}}>
                     {b.category && <div style={{fontSize:10,color:C.sbInkF}}>{b.category}</div>}
                     {b._hasNotes && <div style={{fontSize:10,color:"#c7e4ff"}}>Notas</div>}
-                    {deriveBookStatus(b).state === "preparando" && (
-                      <div style={{fontSize:10,color:"#c4962a",animation:"bob .9s infinite"}}>⟳</div>
-                    )}
-                    {deriveBookStatus(b).state === "atencao" && (
-                      <div style={{fontSize:10,color:"#e07070"}}>✗</div>
-                    )}
+                    {(()=>{ const _b = (selBook?.id===b.id ? selBook : b); const _s = deriveBookStatus(_b).state; return(<>
+                      {_s === "preparando" && <div style={{fontSize:10,color:"#c4962a",animation:"bob .9s infinite"}}>⟳</div>}
+                      {_s === "atencao"    && <div style={{fontSize:10,color:"#e07070"}}>✗</div>}
+                    </>); })()}
                   </div>
 
                   <div style={{display:"flex",gap:4,flexShrink:0}}>
