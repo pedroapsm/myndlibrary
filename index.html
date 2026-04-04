@@ -1531,6 +1531,7 @@ const D = {
   arrowUp:"M12 19V5M6 11l6-6 6 6",
   arrowDown:"M12 5v14M6 13l6 6 6-6",
   logoff:"M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9",
+  chevRight:"M9 18l6-6-6-6",
   insights:"M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"
 };
 
@@ -3625,6 +3626,40 @@ function Sidebar({
   const booksScrollRef=useRef(null);
   const [sortKey,setSortKey]=useState("addedAt");
   const [showSortMenu,setShowSortMenu]=useState(false);
+  const [collapsed,setCollapsed]=useState(false);
+
+  // Sidebar recolhida — barra mínima com botão de expandir
+  if(collapsed){
+    return(
+      <aside
+        className="sidebar-shell"
+        style={{
+          width:48,minWidth:48,
+          background:C.sb,
+          borderRight:`1px solid ${C.sbBorder}`,
+          display:"flex",flexDirection:"column",
+          alignItems:"center",
+          overflow:"hidden",
+          transition:"width .2s ease",
+          flexShrink:0
+        }}
+      >
+        <button
+          onClick={()=>setCollapsed(false)}
+          title="Expandir sidebar"
+          style={{
+            marginTop:14,background:"none",border:"none",cursor:"pointer",
+            color:"rgba(255,255,255,.62)",display:"flex",alignItems:"center",justifyContent:"center",
+            padding:8,borderRadius:6,transition:"color .15s"
+          }}
+          onMouseEnter={e=>e.currentTarget.style.color="#fff"}
+          onMouseLeave={e=>e.currentTarget.style.color="rgba(255,255,255,.62)"}
+        >
+          <Ico d={D.chevRight} sz={16} col="currentColor"/>
+        </button>
+      </aside>
+    );
+  }
 
   const sortedBooks=useMemo(()=>{
     const arr=[...filteredBooks];
@@ -3652,22 +3687,19 @@ function Sidebar({
       }}
     >
       <div style={{padding:"16px 14px 12px",borderBottom:`1px solid ${C.sbBorder}`,flexShrink:0}}>
-        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:4,gap:8}}>
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:8}}>
           <div style={{fontSize:19,fontWeight:700,color:C.sbInk,display:"flex",alignItems:"center",gap:8,whiteSpace:"nowrap"}}>
             <Ico d={D.book} sz={17} col={C.sbInk}/> Mynd Library
           </div>
-          <div style={{display:"flex",alignItems:"center",gap:6,flexShrink:0}}>
-            <ProfileSwitcher userName={userName} onSwitch={switchProfile} profiles={profiles}/>
-            <button
-              title="Sair / Trocar pasta"
-              onClick={onLogoff}
-              style={{background:"none",border:"1px solid rgba(255,255,255,.18)",borderRadius:6,padding:"5px 7px",cursor:"pointer",color:"rgba(255,255,255,.62)",display:"flex",alignItems:"center",transition:"color .15s, border-color .15s"}}
-              onMouseEnter={e=>{ e.currentTarget.style.color="#fff"; e.currentTarget.style.borderColor="rgba(255,255,255,.5)"; }}
-              onMouseLeave={e=>{ e.currentTarget.style.color="rgba(255,255,255,.62)"; e.currentTarget.style.borderColor="rgba(255,255,255,.18)"; }}
-            >
-              <Ico d={D.logoff} sz={13} col="currentColor"/>
-            </button>
-          </div>
+          <button
+            onClick={()=>setCollapsed(true)}
+            title="Recolher sidebar"
+            style={{background:"none",border:"none",cursor:"pointer",color:"rgba(255,255,255,.62)",display:"flex",alignItems:"center",padding:4,borderRadius:5,transition:"color .15s",flexShrink:0}}
+            onMouseEnter={e=>e.currentTarget.style.color="#fff"}
+            onMouseLeave={e=>e.currentTarget.style.color="rgba(255,255,255,.62)"}
+          >
+            <Ico d={D.chevLeft||"M15 18l-6-6 6-6"} sz={16} col="currentColor"/>
+          </button>
         </div>
       </div>
 
@@ -4022,7 +4054,7 @@ function Sidebar({
         )}
       </div>
 
-      <div style={{padding:"12px",borderTop:`1px solid ${C.sbBorder}`,background:C.sb,flexShrink:0}}>
+      <div style={{padding:"12px",borderTop:`1px solid ${C.sbBorder}`,background:C.sb,flexShrink:0,display:"flex",flexDirection:"column",gap:8}}>
         <input ref={fileRef} type="file" accept=".pdf" style={{display:"none"}} onChange={handleFilePick}/>
         <button
           onClick={()=>fileRef.current?.click()}
@@ -4034,6 +4066,18 @@ function Sidebar({
         >
           <Ico d={D.up} sz={15}/> Adicionar livro (PDF)
         </button>
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",paddingTop:4}}>
+          <ProfileSwitcher userName={userName} onSwitch={switchProfile} profiles={profiles}/>
+          <button
+            title="Sair / Trocar pasta"
+            onClick={onLogoff}
+            style={{background:"none",border:"1px solid rgba(255,255,255,.18)",borderRadius:6,padding:"5px 7px",cursor:"pointer",color:"rgba(255,255,255,.62)",display:"flex",alignItems:"center",transition:"color .15s,border-color .15s"}}
+            onMouseEnter={e=>{ e.currentTarget.style.color="#fff"; e.currentTarget.style.borderColor="rgba(255,255,255,.5)"; }}
+            onMouseLeave={e=>{ e.currentTarget.style.color="rgba(255,255,255,.62)"; e.currentTarget.style.borderColor="rgba(255,255,255,.18)"; }}
+          >
+            <Ico d={D.logoff} sz={13} col="currentColor"/>
+          </button>
+        </div>
       </div>
     </aside>
   );
