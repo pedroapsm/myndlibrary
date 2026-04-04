@@ -4190,7 +4190,7 @@ function ConnectionsPage({
               }}
             >
               <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",marginBottom:entry.summary?6:0,gap:8}}>
-                <div style={{fontSize:14,fontWeight:700,color:C.ink,textTransform:"capitalize",lineHeight:1.3}}>{concept}</div>
+                <div style={{fontSize:14,fontWeight:700,color:C.ink,textTransform:"capitalize",lineHeight:1.3,minHeight:"calc(1.3em * 2)",display:"-webkit-box",WebkitLineClamp:2,WebkitBoxOrient:"vertical",overflow:"hidden"}}>{concept}</div>
                 <span style={{...tp,fontSize:10,flexShrink:0,marginTop:1}}>
                   {entry.books?.length||0} {(entry.books?.length||0)===1?"livro":"livros"}
                 </span>
@@ -6058,23 +6058,6 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey,
                     }
                   </span>
 
-                  {/* Badge de índice semântico — baseado exclusivamente em embeddingsStatus */}
-                  {selBook.embeddingsStatus === "processing" && (
-                    <>
-                      <span style={{fontSize:12,color:C.inkF}}>•</span>
-                      <span style={{fontSize:11,padding:"2px 8px",borderRadius:10,background:"rgba(122,90,26,.08)",color:C.gold,border:`1px solid ${C.goldBrd}`,fontWeight:600,display:"flex",alignItems:"center",gap:4}}>
-                        <span style={{animation:"bob .9s infinite"}}>⟳</span> Preparando busca semântica…
-                      </span>
-                    </>
-                  )}
-                  {selBook.embeddingsStatus === "done" && (
-                    <>
-                      <span style={{fontSize:12,color:C.inkF}}>•</span>
-                      <span style={{fontSize:11,padding:"2px 8px",borderRadius:10,background:"rgba(30,92,46,.1)",color:"#1e5c2e",border:"1px solid rgba(30,92,46,.22)",fontWeight:600,display:"flex",alignItems:"center",gap:4}}>
-                        <Ico d={D.check} sz={11} col="#1e5c2e"/> Índice semântico ativo
-                      </span>
-                    </>
-                  )}
                   <BookProcessingStatus book={selBook} onRetry={handleRetry}/>
                 </div>
               </div>
