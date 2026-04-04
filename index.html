@@ -4535,10 +4535,12 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey,
   const [screen,setScreen] = useState("home");
   const [selBook,setSelBook] = useState(null);
   const selBookRef = useRef(null);
+  const bookTextRef = useRef("");
   const screenRef  = useRef("home");
 
   // Keep refs in sync with state for use in async callbacks
   useEffect(()=>{ selBookRef.current = selBook; }, [selBook]);
+  useEffect(()=>{ bookTextRef.current = bookText; }, [bookText]);
   useEffect(()=>{ screenRef.current  = screen;  }, [screen]);
   const [bookText,setBookText] = useState("");
   const [bookEmbeddings,setBookEmbeddings] = useState(null); // embeddings do livro aberto
@@ -4709,7 +4711,7 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey,
 
       const lastId=localStorage.getItem("mynd_lastBook");
       if(lastId){
-        const found=booksWithMeta.find(x=>x.id===lastId);
+        const found=reconciledBooks.find(x=>x.id===lastId);
         if(found) setLastBook(found);
         else localStorage.removeItem("mynd_lastBook");
       }
@@ -5517,7 +5519,7 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey,
       }
     }catch(e){
       console.error("openConnections error:", e);
-      addToast("Não foi possível carregar os conceitos", "error");
+      pushToast("Não foi possível carregar os conceitos");
     }finally{
       setConceptsLoading(false);
     }
@@ -5719,7 +5721,7 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey,
       let decision = null;
 
       if(chatMode === "auto"){
-        decision = await decideAutoMode(txt, bookText, bookEmbeddings, openaiKey, bookCanUseDeep);
+        decision = await decideAutoMode(txt, bookTextRef.current, bookEmbeddings, openaiKey, bookCanUseDeep);
         setAutoDecision(decision);
         effectiveMode = decision.mode;
       }
@@ -5732,7 +5734,7 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey,
 
         // Modo profundo distribuído: 65% semânticos + 35% distribuídos
         let deepChunks;
-        const allCh = splitTextIntoChunks(bookText);
+        const allCh = splitTextIntoChunks(bookTextRef.current);
 
         if(bookEmbeddings && openaiKey){
           const qEmb = decision?.queryEmbedding || await generateEmbedding(txt, openaiKey);
@@ -5775,12 +5777,12 @@ function Library({dirHandle, apiKey, userName:initUser, openaiKey:initOpenaiKey,
               .sort((a,b) => a.index - b.index);
           }else{
             const qEmb = cachedEmbedding || await generateEmbedding(txt, openaiKey);
-            const allCh = splitTextIntoChunks(bookText);
+            const allCh = splitTextIntoChunks(bookTextRef.current);
             chunks = await semanticSelectChunks(allCh, bookEmbeddings, qEmb, MAX_BOOK_CONTEXT_CHUNKS);
           }
         }else{
           // Fallback: keywords (livros antigos sem embeddings, ou sem chave OpenAI, ou ainda gerando)
-          chunks = selectRelevantChunks(bookText, txt, MAX_BOOK_CONTEXT_CHUNKS);
+          chunks = selectRelevantChunks(bookTextRef.current, txt, MAX_BOOK_CONTEXT_CHUNKS);
         }
 
         const system = buildBookContextPrompt(selBook.title, txt, chunks);
