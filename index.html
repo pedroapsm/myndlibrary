@@ -1532,6 +1532,7 @@ const D = {
   arrowDown:"M12 5v14M6 13l6 6 6-6",
   logoff:"M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9",
   chevRight:"M9 18l6-6-6-6",
+  chevLeft:"M15 18l-6-6 6-6",
   insights:"M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"
 };
 
@@ -3628,39 +3629,6 @@ function Sidebar({
   const [showSortMenu,setShowSortMenu]=useState(false);
   const [collapsed,setCollapsed]=useState(false);
 
-  // Sidebar recolhida — barra mínima com botão de expandir
-  if(collapsed){
-    return(
-      <aside
-        className="sidebar-shell"
-        style={{
-          width:48,minWidth:48,
-          background:C.sb,
-          borderRight:`1px solid ${C.sbBorder}`,
-          display:"flex",flexDirection:"column",
-          alignItems:"center",
-          overflow:"hidden",
-          transition:"width .2s ease",
-          flexShrink:0
-        }}
-      >
-        <button
-          onClick={()=>setCollapsed(false)}
-          title="Expandir sidebar"
-          style={{
-            marginTop:14,background:"none",border:"none",cursor:"pointer",
-            color:"rgba(255,255,255,.62)",display:"flex",alignItems:"center",justifyContent:"center",
-            padding:8,borderRadius:6,transition:"color .15s"
-          }}
-          onMouseEnter={e=>e.currentTarget.style.color="#fff"}
-          onMouseLeave={e=>e.currentTarget.style.color="rgba(255,255,255,.62)"}
-        >
-          <Ico d={D.chevRight} sz={16} col="currentColor"/>
-        </button>
-      </aside>
-    );
-  }
-
   const sortedBooks=useMemo(()=>{
     const arr=[...filteredBooks];
     arr.sort((a,b)=>{
@@ -3677,15 +3645,34 @@ function Sidebar({
     <aside
       className="sidebar-shell"
       style={{
-        width:296,
-        minWidth:296,
+        width: collapsed ? 48 : 296,
+        minWidth: collapsed ? 48 : 296,
         background:C.sb,
         borderRight:`1px solid ${C.sbBorder}`,
         display:"flex",
         flexDirection:"column",
-        overflow:"hidden"
+        overflow:"hidden",
+        flexShrink:0,
+        transition:"width .2s ease, min-width .2s ease"
       }}
     >
+      {/* ── Modo recolhido ── */}
+      {collapsed && (
+        <div style={{display:"flex",flexDirection:"column",alignItems:"center",paddingTop:12,flex:1}}>
+          <button
+            onClick={()=>setCollapsed(false)}
+            title="Expandir sidebar"
+            style={{background:"none",border:"none",cursor:"pointer",color:"rgba(255,255,255,.62)",display:"flex",alignItems:"center",justifyContent:"center",padding:8,borderRadius:6,transition:"color .15s"}}
+            onMouseEnter={e=>e.currentTarget.style.color="#fff"}
+            onMouseLeave={e=>e.currentTarget.style.color="rgba(255,255,255,.62)"}
+          >
+            <Ico d={D.chevRight} sz={16} col="currentColor"/>
+          </button>
+        </div>
+      )}
+
+      {/* ── Modo expandido ── */}
+      {!collapsed && <>
       <div style={{padding:"16px 14px 12px",borderBottom:`1px solid ${C.sbBorder}`,flexShrink:0}}>
         <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:8}}>
           <div style={{fontSize:19,fontWeight:700,color:C.sbInk,display:"flex",alignItems:"center",gap:8,whiteSpace:"nowrap"}}>
@@ -3698,7 +3685,7 @@ function Sidebar({
             onMouseEnter={e=>e.currentTarget.style.color="#fff"}
             onMouseLeave={e=>e.currentTarget.style.color="rgba(255,255,255,.62)"}
           >
-            <Ico d={D.chevLeft||"M15 18l-6-6 6-6"} sz={16} col="currentColor"/>
+            <Ico d={D.chevLeft} sz={16} col="currentColor"/>
           </button>
         </div>
       </div>
@@ -4079,6 +4066,7 @@ function Sidebar({
           </button>
         </div>
       </div>
+      </>}
     </aside>
   );
 }
